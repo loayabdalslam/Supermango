@@ -1,14 +1,39 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import app from './index.js';
-import { bridge } from './bridge.js';
+import { bridge } from './mesh.js';
 
-// Initialize P2P bridge connection for local development
-console.log("\x1b[35m🛰️  Initializing Neural Bridge...\x1b[0m");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DIST_DIR = path.resolve(__dirname, '..', 'dist');
+const INDEX_FILE = path.join(DIST_DIR, 'index.html');
+
+if (fs.existsSync(INDEX_FILE)) {
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
+    res.sendFile(INDEX_FILE);
+  });
+}
+
+app.use((req, res) => {
+  res.status(404).json({ error: `Route ${req.url} not found` });
+});
+
+const PORT = Number(process.env.API_PORT || process.env.PORT || 3001);
+const HOST = process.env.API_HOST || '127.0.0.1';
+
 bridge.connect();
 
-const PORT = process.env.API_PORT || 3001;
-
-app.listen(PORT, () => {
-    console.log(`\x1b[35m🛰️  CoitHub Unified Gateway: http://localhost:${PORT}\x1b[0m`);
-    console.log(`\x1b[32mEndpoints: REGISTER, GENERATE (Stream), STATUS, METRICS, SUBSCRIBE\x1b[0m`);
-    console.log(`\x1b[33mProxying to: ${process.env.VITE_SUPABASE_URL || 'Local Mesh'}\x1b[0m`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Bee2Bee local gateway: http://${HOST}:${PORT}`);
+  console.log(`UI: ${fs.existsSync(INDEX_FILE) ? 'serving app/dist' : 'run "npm run dev" for the Vite UI'}`);
+  console.log('Endpoints: /api/p2p/register, /api/p2p/generate, /api/p2p/status');
 });
+
+function shutdown() {
+  server.close(() => process.exit(0));
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

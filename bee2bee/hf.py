@@ -3,6 +3,8 @@ from typing import Any, Dict, Optional, List, Tuple
 import json
 from dataclasses import dataclass
 
+from loguru import logger
+
 
 def has_transformers() -> bool:
     try:

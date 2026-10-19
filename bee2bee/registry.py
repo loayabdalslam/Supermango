@@ -1,69 +1,93 @@
+from __future__ import annotations
+
+import json
 import os
-import httpx
+import time
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 from loguru import logger
-from typing import List, Optional
+
+from .utils import bee2bee_home
+
 
 class RegistryClient:
-    """Handles communication with the central Supabase Node Registry."""
-    
+    """Local, file-backed node registry.
+
+    The registry lives in ``~/.bee2bee/registry.json`` and is only used for
+    local/LAN discovery. There is no remote service, database, or API key.
+    Entries older than ``BEE2BEE_REGISTRY_TTL`` seconds are ignored.
+    """
+
     def __init__(self, entrypoint_url: Optional[str] = None):
-        # Direct Supabase Mode
-        self.supabase_url = os.getenv("VITE_SUPABASE_URL") or os.getenv("SUPABASE_URL")
-        self.supabase_key = os.getenv("VITE_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY")
-        
-        # Cluster Entrypoint Mode (Remote Handshake)
-        self.entrypoint_url = entrypoint_url or os.getenv("BEE2BEE_ENTRYPOINT")
-        
-        self.enabled = bool((self.supabase_url and self.supabase_key) or self.entrypoint_url)
-        
-        if self.enabled:
-            if self.supabase_url and self.supabase_key:
-                self.api_url = f"{self.supabase_url.rstrip('/')}/rest/v1/active_nodes"
-                self.headers = {
-                    "apikey": self.supabase_key,
-                    "Authorization": f"Bearer {self.supabase_key}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates"
-                }
-            else:
-                # Fallback to entrypoint relay (shakehand)
-                self.api_url = f"{self.entrypoint_url.rstrip('/')}/api/nodes/register"
-                self.headers = {"Content-Type": "application/json"}
-        else:
-            logger.warning("No Registry Credentials. Node will run in Private/Offline mode.")
+        self.entrypoint_url = entrypoint_url
+        self.path: Path = bee2bee_home() / "registry.json"
+        self.ttl = int(os.getenv("BEE2BEE_REGISTRY_TTL", "120"))
+        self.enabled = os.getenv("BEE2BEE_LOCAL_REGISTRY", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+
+    def _read(self) -> Dict[str, Dict[str, Any]]:
+        if not self.path.exists():
+            return {}
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception as exc:
+            logger.warning(f"Could not read local registry: {exc}")
+            return {}
+
+    def _write(self, nodes: Dict[str, Dict[str, Any]]) -> None:
+        try:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(nodes, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.path)
+        except Exception as exc:
+            logger.warning(f"Could not write local registry: {exc}")
+
+    def _fresh(self, entry: Dict[str, Any]) -> bool:
+        last_seen = entry.get("last_seen_ts")
+        if not last_seen:
+            return False
+        return (time.time() - float(last_seen)) <= self.ttl
 
     async def sync_node(
-        self, 
-        peer_id: str, 
-        address: str, 
-        models: List[str], 
+        self,
+        peer_id: str,
+        address: str,
+        models: List[str],
         latency: float = 0.0,
-        tag: str = "global",
+        tag: str = "local",
         region: str = "Auto",
-        metrics: Optional[dict] = None
+        metrics: Optional[dict] = None,
     ) -> bool:
-        """Upsert node status to the global registry."""
-        if not self.enabled:
+        if not self.enabled or not peer_id or not address:
             return False
-            
-        payload = {
+
+        nodes = {key: value for key, value in self._read().items() if self._fresh(value)}
+        nodes[peer_id] = {
             "peer_id": peer_id,
             "addr": address,
             "models": models,
             "latency_ms": latency,
             "region": region,
             "tag": tag,
-            "metrics": metrics,
-            "last_seen": datetime.now(timezone.utc).isoformat()
+            "metrics": metrics or {},
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "last_seen_ts": time.time(),
         }
-        
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(self.api_url, json=payload, headers=self.headers, timeout=5.0)
-                if resp.status_code in [200, 201]:
-                    return True
-                logger.error(f"Registry sync failed: {resp.status_code} - {resp.text}")
-        except Exception as e:
-            logger.error(f"Registry connection error: {e}")
-        return False
+        self._write(nodes)
+        return True
+
+    async def list_nodes(self, limit: int = 50) -> List[Dict[str, Any]]:
+        nodes = [entry for entry in self._read().values() if self._fresh(entry)]
+        nodes.sort(key=lambda item: item.get("last_seen_ts", 0), reverse=True)
+        return nodes[:limit]
+
+    def list_nodes_sync(self, limit: int = 50) -> List[Dict[str, Any]]:
+        nodes = [entry for entry in self._read().values() if self._fresh(entry)]
+        nodes.sort(key=lambda item: item.get("last_seen_ts", 0), reverse=True)
+        return nodes[:limit]

@@ -1,25 +1,23 @@
 from __future__ import annotations
+
 import asyncio
 import json
+import os
 import time
-import base64
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
+
 import websockets
-from websockets.asyncio.server import serve, ServerConnection, Response
-from websockets.datastructures import Headers
-from websockets.asyncio.client import connect, ClientConnection
-from rich.console import Console
 from loguru import logger
-import httpx
+from rich.console import Console
+from websockets.asyncio.client import ClientConnection, connect
+from websockets.asyncio.server import Response, ServerConnection, serve
 
-
-from .p2p import parse_join_link, sha256_hex_bytes
-from .utils import new_id, is_colab
-from .pieces import split_pieces, piece_hashes
-from .services import BaseService, HFService, ServiceError
-from .nat import try_upnp_map
-from .nat import auto_port_forward, try_stun, get_public_ip
+from .nat import auto_port_forward, get_public_ip, try_stun
+from .p2p import generate_join_link, parse_join_link, sha256_hex_bytes
 from .registry import RegistryClient
+from .services import BaseService, HFService, ServiceError
+from .utils import is_colab, new_id
 
 # In Colab/Jupyter, rich auto-detects HTML output which often buffers or fails in subprocesses.
 # We force terminal mode to ensure we get raw text streaming.
@@ -39,6 +37,7 @@ class P2PNode:
         self.peer_id = new_id("peer")
         self.registry = RegistryClient(entrypoint_url=entrypoint_url)
         self.region = region
+        self.start_time = time.time()
         
         # We'll set self.addr after start() once we know the port
         self.addr = "" 
@@ -61,7 +60,7 @@ class P2PNode:
             return
         self._monitor_active = True
         asyncio.create_task(self._monitoring_loop(interval_seconds))
-        console.print(f"[bold magenta]👁️ Supervisor Monitoring Enabled (Interval: {interval_seconds}s)[/bold magenta]")
+        console.print(f"[bold magenta]Supervisor Monitoring Enabled (Interval: {interval_seconds}s)[/bold magenta]")
 
     async def _monitoring_loop(self, interval: int):
         while self._monitor_active and self._running:
@@ -74,7 +73,7 @@ class P2PNode:
             await asyncio.sleep(interval)
 
     async def sync_with_registry(self):
-        """Register/Update this node in the global Supabase directory."""
+        """Register or refresh this node in the local discovery registry."""
         if not self.addr or not self.registry.enabled:
             return
         
@@ -144,7 +143,7 @@ class P2PNode:
                     self.providers[pid]["health"] = "good" 
                     
             except Exception as e:
-                console.log(f"[red]Ping failed to {pid}: {e}[/red]")
+                console.print(f"[red]Ping failed to {pid}: {e}[/red]")
                 self.peers[pid]["health_status"] = "unreachable"
                 if pid in self.providers:
                     self.providers[pid]["health"] = "degraded"
@@ -178,6 +177,7 @@ class P2PNode:
                 process_response=_process_response
             )
             self._running = True
+            self.start_time = time.time()
             logger.success("WebSocket server started successfully")
         except Exception as e:
             logger.error(f"Failed to start WebSocket server: {e}")
@@ -197,79 +197,51 @@ class P2PNode:
             logger.info(f"Using announce_host: {display_host}")
         elif self.host == "0.0.0.0":
             from .utils import get_lan_ip
+
             display_host = get_lan_ip()
             logger.info(f"Detected LAN IP: {display_host}")
 
-            # Try UPnP only if we are on 0.0.0.0 (likely local dev / home router)
-            console.log(f"[dim]Attempting Auto Port Forwarding for port {self.port}...[/dim]")
-            
-            try:
-                # Try port forwarding
-                console.log(f"[debug] Calling auto_port_forward({self.port}, 'TCP')")
-                forward_result = await auto_port_forward(self.port, "TCP")
-
-                if forward_result and forward_result.success:
-                    if forward_result.method == "UPnP":
-                        console.log(f"[green]✅ UPnP Success:[/green] Port {self.port} mapped")
-                    else:
-                        console.log(f"[green]✅ {forward_result.method} Success:[/green]")
-
-                    display_host = forward_result.external_ip
-                    console.log(f"[cyan]External IP detected: {display_host}[/cyan]")
-
-                    if forward_result.external_port != self.port:
-                        logger.warning(f"Port translation: {self.port} → {forward_result.external_port}")
-                        self.external_port = forward_result.external_port
-                else:
-                    logger.warning("Auto port forwarding failed or returned no result")
-                    forward_result = None
-            except Exception as e:
-                logger.error(f"Port forwarding failed: {e}")
+            # Public/NAT discovery is opt-in. The local web app only needs LAN
+            # connectivity, and probing routers at startup slows it down.
+            if os.getenv("BEE2BEE_NAT", "0").lower() in {"1", "true", "yes"}:
+                console.print(f"[dim]Attempting auto port forwarding for port {self.port}...[/dim]")
                 forward_result = None
-            
-            if not forward_result or not forward_result.success:
-                console.log(f"[dim yellow]Trying STUN to find public IP...[/dim yellow]")
-                
-                # Try STUN as final fallback
                 try:
-                    stun_res = await try_stun()
-                    if stun_res:
-                        stun_ip, stun_port = stun_res
-                        logger.success(f"STUN Success: Public IP is {stun_ip}:{stun_port}")
-                        
-                        display_host = stun_ip
-                        
-                        # Handle port translation
-                        if stun_port > 0 and stun_port != self.port:
-                            console.log(f"[yellow]⚠️ NAT changed port: {self.port} → {stun_port}[/yellow]")
-                            console.log(f"[yellow]You may need to forward port {stun_port} on your router[/yellow]")
-                            self.external_port = stun_port
+                    forward_result = await auto_port_forward(self.port, "TCP")
+                    if forward_result and forward_result.success:
+                        display_host = forward_result.external_ip
+                        if forward_result.external_port != self.port:
+                            self.external_port = forward_result.external_port
+                        console.print(f"[green]{forward_result.method}:[/green] {display_host}")
+                except Exception as exc:
+                    logger.warning(f"Port forwarding failed: {exc}")
+
+                if not forward_result or not forward_result.success:
+                    try:
+                        stun_res = await try_stun()
+                        if stun_res:
+                            display_host, stun_port = stun_res
+                            if stun_port and stun_port != self.port:
+                                self.external_port = stun_port
                         else:
-                            console.log(f"[yellow]Note: You may need to manually forward port {self.port} on your router.[/yellow]")
-                    else:
-                        logger.error(f"STUN failed. Using LAN IP: {display_host}")
-                except Exception as e:
-                    logger.error(f"STUN error: {e}")
-                    
-                # Still try to get public IP for manual instructions
-                try:
-                    public_ip = await get_public_ip()
-                    if public_ip:
-                        console.log(f"[yellow]Your public IP appears to be: {public_ip}[/yellow]")
-                        console.log(f"[yellow]Manual port forwarding needed for public access[/yellow]")
-                except Exception as e:
-                    console.log(f"[dim]Could not get public IP: {e}[/dim]")
+                            public_ip = await get_public_ip()
+                            if public_ip:
+                                console.print(
+                                    f"[yellow]Public IP: {public_ip} (port forwarding may be required)[/yellow]"
+                                )
+                    except Exception as exc:
+                        logger.warning(f"STUN discovery failed: {exc}")
         else:
             display_host = self.host
-            console.log(f"[cyan]Using host: {display_host}[/cyan]")
+            console.print(f"[cyan]Using host: {display_host}[/cyan]")
             
         # Use explicit announce_port if provided, otherwise use the appropriate port
         if hasattr(self, 'external_port') and self.external_port and not self.announce_port:
             display_port = self.external_port
-            console.log(f"[cyan]Using external port: {display_port}[/cyan]")
+            console.print(f"[cyan]Using external port: {display_port}[/cyan]")
         else:
             display_port = self.announce_port if self.announce_port else self.port
-            console.log(f"[cyan]Using port: {display_port}[/cyan]")
+            console.print(f"[cyan]Using port: {display_port}[/cyan]")
             
         self.addr = f"ws://{display_host}:{display_port}"
         
@@ -285,7 +257,7 @@ class P2PNode:
         logger.info(f"Peer ID: {self.peer_id}")
 
     async def stop(self):
-        console.log(f"[yellow]Stopping P2P Node...[/yellow]")
+        console.print(f"[yellow]Stopping P2P Node...[/yellow]")
         self._running = False
         self._monitor_active = False
         
@@ -307,7 +279,7 @@ class P2PNode:
 
     async def connect_bootstrap(self, link_or_addr: str):
         addrs: List[str]
-        if any(link_or_addr.startswith(p) for p in ["p2pnet://", "coithub://", "coithub.org://"]):
+        if link_or_addr.startswith("bee2bee://"):
             parsed = parse_join_link(link_or_addr)
             addrs = [a for a in parsed.get("bootstrap", [])]
             logger.info(f"Parsed join link, bootstrap addresses: {addrs}")
@@ -493,8 +465,17 @@ class P2PNode:
                 self.peers.pop(old_pid)
                 
             # Preserve existing metrics if present
-            existing_metrics = self.peers.get(pid, {}).get("metrics")
-            self.peers[pid] = {"ws": ws, "addr": addr, "last_pong_ms": 0, "metrics": existing_metrics}
+            existing = self.peers.get(pid, {})
+            self.peers[pid] = {
+                "ws": ws,
+                "addr": addr,
+                "last_pong_ms": existing.get("last_pong_ms", 0),
+                "metrics": data.get("metrics") or existing.get("metrics"),
+                "api_port": data.get("api_port") or existing.get("api_port"),
+                "api_host": data.get("api_host") or existing.get("api_host"),
+                "public_ip": data.get("public_ip") or existing.get("public_ip"),
+                "region": data.get("region") or existing.get("region"),
+            }
             
             # Update providers
             svcs = data.get("services", {})
@@ -597,28 +578,30 @@ class P2PNode:
             try:
                 logger.info(f"Executing locally via {svc_name} (Stream: {data.get('stream')})")
                 if data.get("stream"):
-                    # WebSocket Streaming support
                     for chunk_raw in svc.execute_stream(params):
-                        # execute_stream yields JSON-line strings, we need the object or raw string
-                        try:
-                            chunk_data = json.loads(chunk_raw)
-                            chunk_text = chunk_data.get("text", "")
-                            if chunk_text:
-                                await self._send(ws, {
-                                    "type": "gen_chunk",
-                                    "rid": rid,
-                                    "text": chunk_text
-                                })
-                        except:
-                            pass
-                    
-                    # Final closure signal
-                    await self._send(ws, {
-                        "type": "gen_success",
-                        "rid": rid,
-                        "text": "", # chunks already sent
-                        "backend": "hf-transformer"
-                    })
+                        chunk_text = ""
+                        if isinstance(chunk_raw, dict):
+                            chunk_text = chunk_raw.get("text", "")
+                        elif isinstance(chunk_raw, str):
+                            try:
+                                chunk_data = json.loads(chunk_raw)
+                                chunk_text = chunk_data.get("text", "")
+                            except json.JSONDecodeError:
+                                chunk_text = chunk_raw
+                        if chunk_text:
+                            await self._send(
+                                ws, {"type": "gen_chunk", "rid": rid, "text": chunk_text}
+                            )
+
+                    await self._send(
+                        ws,
+                        {
+                            "type": "gen_success",
+                            "rid": rid,
+                            "text": "",
+                            "backend": svc.name,
+                        },
+                    )
                 else:
                     # Legacy Buffered support
                     result = svc.execute(params)
@@ -708,13 +691,16 @@ class P2PNode:
                          service_tag = meta["tag"]
             
             if found_ai_service:
+                peer = self.peers.get(pid, {})
                 out.append({
                     "peer_id": pid,
-                    "addr": self.peers.get(pid, {}).get("addr"),
-                    "latency_ms": svcs.get("_latency"),
-                    "models": list(set(all_models)),
+                    "addr": peer.get("addr"),
+                    "latency_ms": peer.get("last_pong_ms") or svcs.get("_latency"),
+                    "models": sorted(set(all_models)),
                     "price_per_token": min_price if min_price != float('inf') else 0.0,
-                    "tag": service_tag
+                    "tag": service_tag,
+                    "api_port": peer.get("api_port"),
+                    "api_host": peer.get("api_host") or peer.get("public_ip"),
                 })
         
         logger.debug(f"Found {len(out)} providers")
@@ -840,121 +826,121 @@ class P2PNode:
             raise
 
 
+def build_service(backend: str, model_name: str, price_per_token: float = 0.0, endpoint: Optional[str] = None):
+    """Create a local inference service from a backend name."""
+    if backend == "hf":
+        return HFService(model_name, float(price_per_token or 0.0))
+    if backend == "hf_remote":
+        from .services import HFRemoteService
+
+        return HFRemoteService(model_name, price_per_token=float(price_per_token or 0.005))
+    if backend == "ollama":
+        from .services import OllamaService
+
+        return OllamaService(model_name, host=endpoint or os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+    raise ValueError(f"Unknown backend: {backend}")
+
+
 async def run_p2p_node(
-    host: str = None, 
-    port: int = None, 
-    bootstrap_link: str = None, 
-    model_name: str = None, 
-    price_per_token: float = 0.0, 
-    announce_host: str = None, 
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    bootstrap_link: Optional[str] = None,
+    model_name: Optional[str] = None,
+    price_per_token: float = 0.0,
+    announce_host: Optional[str] = None,
     backend: str = "hf",
-    api_port: int = None,
-    entrypoint_url: str = None,
-    region: str = "Auto"
+    api_port: Optional[int] = None,
+    entrypoint_url: Optional[str] = None,
+    region: str = "Auto",
+    endpoint: Optional[str] = None,
 ):
     """Entry point for running a peer node with one or more models."""
-    from .p2p import generate_join_link
-    
-    console.print(f"\n[bold cyan]🚀 Starting P2P Node[/bold cyan]")
+    console.print("\n[bold cyan]Starting Bee2Bee P2P node[/bold cyan]")
     console.print(f"[dim]Host: {host or '0.0.0.0'}, Port: {port or 0}, Region: {region}[/dim]")
-    
-    node = P2PNode(host=host or "0.0.0.0", port=port or 0, announce_host=announce_host, entrypoint_url=entrypoint_url, region=region)
-    
-    # Store API config on node for hello message
+
+    node = P2PNode(
+        host=host or "0.0.0.0",
+        port=port or 0,
+        announce_host=announce_host,
+        entrypoint_url=entrypoint_url,
+        region=region,
+    )
+
     node.api_port = api_port or 8000
     node.api_host = node.announce_host or node.host
-    
+
     await node.start()
-    
-    # Start API if requested
+
     if api_port:
-        import uvicorn
-        from .api import app as api_app
-        # Seed the global node in api.py
         import bee2bee.api
+        import uvicorn
+
         bee2bee.api.node = node
-        config = uvicorn.Config(api_app, host=node.host, port=api_port, log_level="warning")
+        config = uvicorn.Config(bee2bee.api.app, host=node.host, port=api_port, log_level="warning")
         server = uvicorn.Server(config)
         asyncio.create_task(server.serve())
-        console.print(f"[bold green]🚀 API Gateway started on http://{node.host}:{api_port}[/bold green]")
-    
-    # Port/Addr is now auto-resolved by start()
-    
+        console.print(f"[bold green]API gateway started on http://{node.host}:{api_port}[/bold green]")
+
     if bootstrap_link:
-        console.print(f"\n[yellow]🔗 Connecting to bootstrap...[/yellow] {bootstrap_link}")
+        console.print(f"\n[yellow]Connecting to bootstrap:[/yellow] {bootstrap_link}")
         await node.connect_bootstrap(bootstrap_link)
-    
+
     if model_name:
-        console.print(f"\n[yellow]🤖 Preparing model '{model_name}' ({backend})...[/yellow]")
-        
-        svc = None
-        if backend == "hf":
-            svc = HFService(model_name, float(price_per_token or 0.0))
-        elif backend == "hf_remote":
-            from .services import HFRemoteService
-            # Get token from env or parameters if we extend it later
-            svc = HFRemoteService(model_name, price_per_token=float(price_per_token or 0.005))
-        elif backend == "ollama":
-            from .services import OllamaService
-            svc = OllamaService(model_name)
-        else:
-            console.print(f"[red]Unknown backend: {backend}[/red]")
+        console.print(f"\n[yellow]Preparing model '{model_name}' ({backend})...[/yellow]")
+        try:
+            svc = build_service(backend, model_name, price_per_token, endpoint)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
             return
 
-        # Run loading in thread so we don't block pings
-        if svc:
-            console.print(f"[dim]Loading model...[/dim]")
+        try:
             loop = asyncio.get_running_loop()
-            try:
-                await loop.run_in_executor(None, svc.load_sync)
-                console.print(f"[green]✅ Model loaded successfully[/green]")
-            except Exception as e:
-                console.print(f"[red]❌ Failed to load model: {e}[/red]")
-                return
-            
-            await node.add_service(svc)
-            
-            model_hash = sha256_hex_bytes(model_name.encode())
-            # For ollama, we might want to hint the backend in the join link, but standard join link is model based.
-            # We'll just advertise the model name.
-            join_link = generate_join_link("connectit", model_name, model_hash, [node.addr])
-            
-            # --- One-Click Registration Link ---
-            # Standard console link if terminal supports it
-            from urllib.parse import quote
-            encoded_link = quote(join_link, safe='')
-            web_reg_url = f"https://coithub.org/register?link={encoded_link}&region={quote(region, safe='')}&tag={quote(backend, safe='')}&api_port={api_port}"
-            
-            console.print(f"\n[bold green]✨ One-Click Registration Enabled[/bold green]")
-            console.print(f"[blue]Register and Monitor live at:[/blue] [link={web_reg_url}]{web_reg_url}[/link]")
-            console.print(f"[dim]Click the link above to fill survey and start performance tracking.[/dim]\n")
+            await loop.run_in_executor(None, svc.load_sync)
+            console.print("[green]Model loaded successfully[/green]")
+        except Exception as exc:
+            console.print(f"[red]Failed to load model: {exc}[/red]")
+            return
 
-            console.print(f"[cyan]Model:[/cyan] {model_name} ({backend})")
-            console.print(f"[blue]Deep Link:[/blue] {join_link}")
+        await node.add_service(svc)
 
-    # Initial sync and start autonomous monitoring
+        model_hash = sha256_hex_bytes(model_name.encode())
+        join_link = generate_join_link(
+            "bee2bee", model_name, model_hash, [node.addr], api_port=api_port
+        )
+        web_url = os.getenv("BEE2BEE_WEB_URL", "http://localhost:3000").rstrip("/")
+        invite_url = (
+            f"{web_url}/?link={quote(join_link, safe='')}"
+            f"&region={quote(region, safe='')}&tag={quote(backend, safe='')}"
+            f"&api_port={api_port or ''}"
+        )
+
+        console.print("\n[bold green]Local invitation ready[/bold green]")
+        console.print(f"[blue]Open the local app:[/blue] [link={invite_url}]{invite_url}[/link]")
+        console.print(f"[cyan]Model:[/cyan] {model_name} ({backend})")
+        console.print(f"[blue]Deep link:[/blue] {join_link}")
+
     if node.registry.enabled:
         await node.enable_monitoring()
         await node.sync_with_registry()
 
-    # Keep alive with Heartbeat
     try:
-        console.print(f"\n[green]✅ Node running. Press Ctrl+C to stop.[/green]")
+        console.print("\n[green]Node running. Press Ctrl+C to stop.[/green]")
         while True:
             await asyncio.sleep(15)
-            # Periodic Heartbeat
-            peer_count = len(node.peers)
-            logger.debug(f"💓 Heartbeat | Peers: {peer_count} | Services: {len(node.local_services)}")
-            
+            logger.debug(
+                f"Heartbeat | Peers: {len(node.peers)} | Services: {len(node.local_services)}"
+            )
     except asyncio.CancelledError:
-        console.print(f"\n[yellow]👋 Stopping node...[/yellow]")
+        console.print("\n[yellow]Stopping node...[/yellow]")
         await node.stop()
     except KeyboardInterrupt:
-        console.print(f"\n[yellow]👋 Received interrupt, stopping...[/yellow]")
+        console.print("\n[yellow]Interrupted, stopping...[/yellow]")
         await node.stop()
+
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Bee2Bee P2P Runtime Engine")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=4001, help="Bind port")
@@ -964,17 +950,18 @@ if __name__ == "__main__":
     parser.add_argument("--endpoint", default=None, help="Backend endpoint URL (e.g. for Ollama)")
     parser.add_argument("--tag", default="Core-Node", help="Node tag/region")
     parser.add_argument("--bootstrap", default=None, help="Bootstrap node link")
-    
+
     args = parser.parse_args()
 
-    if args.endpoint and args.provider == "ollama":
-        os.environ["OLLAMA_HOST"] = args.endpoint
-
-    asyncio.run(run_p2p_node(
-        host=args.host,
-        port=args.port,
-        model_name=args.model if args.register else None,
-        backend=args.provider,
-        bootstrap_link=args.bootstrap,
-        announce_host=args.host
-    ))
+    asyncio.run(
+        run_p2p_node(
+            host=args.host,
+            port=args.port,
+            model_name=args.model if args.register else None,
+            backend=args.provider,
+            bootstrap_link=args.bootstrap,
+            announce_host=args.host,
+            endpoint=args.endpoint,
+            region=args.tag,
+        )
+    )

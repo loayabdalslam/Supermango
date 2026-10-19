@@ -8,3 +8,4 @@ kademlia>=2.2.2
 miniupnpc>=2.2.5
 aiortc>=1.9.0
 pytest
+httpx

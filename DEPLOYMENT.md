@@ -1,33 +1,83 @@
-# Bee2Bee Deployment Guide
+# Deployment
 
-## Can I use Vercel?
-**Short Answer: No.**
+Bee2Bee is designed to run locally or on a machine you control. It is a long-running process with a persistent WebSocket server, so serverless platforms (Vercel, Netlify Functions, AWS Lambda) are not a fit.
 
-**Reason:** Vercel is designed for *Serverless Functions* and Static Websites.
--   **No WebSockets**: `connectit` requires a persistent WebSocket connection to keep the P2P node alive. Vercel functions time out after 10-60 seconds, which will disconnect your node immediately.
--   **No Background Tasks**: The P2P node runs in the background. Serverless functions freeze immediately after sending a HTTP response.
+## Local machine (recommended)
 
----
+### Development
 
-## Recommended Deployment Options (Cloud)
+```bash
+# Terminal 1: node + model
+bee2bee serve-ollama --model gemma3:270m --api-port 4002
 
-Since `bee2bee` needs to run as a **Service** (a long-running process), you should use platforms that support Docker or persistent apps.
-
-### 1. Railway (Easiest)
-Railway detects the `Dockerfile` automatically.
-1.  Push your code to GitHub.
-2.  Import project in [Railway.app](https://railway.app/).
-3.  Add a generic variable `PORT=4002` (FastAPI).
-4.  Railway will build and deploy.
-5.  **Note**: For P2P to work best, you might need a service that allows exposing multiple ports (TCP/UDP), or just rely on the main HTTP/WS port.
-
-### 2. Fly.io (Best for P2P)
-docker run -d --net=host --restart=always bee2bee
+# Terminal 2: web app
+cd app
+npm install
+npm run dev
 ```
-*Note: `--net=host` is recommended for P2P apps to simplify port forwarding.*
 
-## Local Deployment (Home)
-If running at home (as you are now):
--   **UPnP**: The app tries to open ports automatically.
--   **Manual**: Forward TCP port `4003` on your router to your PC.
--   **Tunnel**: Use `ngrok` if you cannot access your router.
+Open <http://localhost:3000>.
+
+### Production-style local build
+
+```bash
+cd app
+npm run local
+```
+
+The Express gateway serves the built UI at <http://127.0.0.1:3001> and keeps the WebSocket bridge to the node.
+
+### Windows helper
+
+```powershell
+./run.ps1 -Model gemma3:270m
+```
+
+### Linux/macOS helper
+
+```bash
+BEE2BEE_MODEL=gemma3:270m ./run.sh
+```
+
+## Docker
+
+```bash
+docker build -t bee2bee .
+docker run --rm -p 4002:4002 -p 4003:4003 bee2bee
+```
+
+The image starts `python -m bee2bee api` (mesh + HTTP API). Add a model by overriding the command:
+
+```bash
+docker run --rm -p 4002:4002 -p 4003:4003 bee2bee \
+  python -m bee2bee serve-ollama --model llama3 --host 0.0.0.0 --port 4003 --api-port 4002
+```
+
+For Ollama running on the host from inside Docker on Linux, add `--add-host=host.docker.internal:host-gateway` and pass `--endpoint http://host.docker.internal:11434`.
+
+## Long-running hosts
+
+Any host that supports a persistent process works:
+
+- a home server or spare laptop,
+- a VPS with Docker,
+- Fly.io / Railway / Render using the Dockerfile (TCP and WebSocket support required).
+
+If you need peers outside your LAN to connect, either forward TCP `4003` on your router or set `BEE2BEE_NAT=1` to let the node attempt UPnP/STUN discovery.
+
+## Ports
+
+| Port | Purpose |
+| --- | --- |
+| `3000` | Vite dev server |
+| `3001` | Express gateway (production UI + `/api`) |
+| `4002` | Node HTTP API |
+| `4003` | P2P WebSocket |
+
+## Storage
+
+- Registry: `~/.bee2bee/registry.json`
+- Logs: `bee2bee.log` in the working directory
+- Config: `~/.bee2bee/config.json`
+
+No chat history is uploaded anywhere.

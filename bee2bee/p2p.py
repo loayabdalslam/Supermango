@@ -1,39 +1,59 @@
 from __future__ import annotations
-from typing import Dict, Any, List, Tuple
-from urllib.parse import urlencode, urlparse, parse_qs
+
 import base64
 import hashlib
+from typing import Any, Dict, List
+from urllib.parse import parse_qs, urlencode, urlparse
+
+JOIN_SCHEME = "bee2bee"
 
 
-def generate_join_link(network: str, model: str, hash_hex: str, bootstrap: List[str]) -> str:
-    # bootstrap entries as multiaddrs or host:port strings
-    # Use URL-safe base64 and remove padding to avoid URL issues
-    parts = [f"bootstrap={base64.urlsafe_b64encode(b.encode()).decode().rstrip('=')}" for b in bootstrap]
-    qs = f"network={network}&model={model}&hash={hash_hex}"
-    if parts:
-        qs = qs + "&" + "&".join(parts)
-    return f"coithub.org://join?{qs}"
+def _b64encode(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+
+
+def _b64decode(value: str) -> str:
+    padded = value + "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(padded).decode()
+
+
+def generate_join_link(
+    network: str,
+    model: str,
+    hash_hex: str,
+    bootstrap: List[str],
+    api_port: int | None = None,
+) -> str:
+    """Build a local ``bee2bee://join`` deep link.
+
+    No external coordinator is involved: the link only carries the model and
+    the bootstrap WebSocket address(es) of the node that generated it.
+    """
+    params: Dict[str, Any] = {
+        "network": network,
+        "model": model,
+        "hash": hash_hex,
+    }
+    if api_port is not None:
+        params["api_port"] = int(api_port)
+    if bootstrap:
+        params["bootstrap"] = [_b64encode(addr) for addr in bootstrap]
+    return f"{JOIN_SCHEME}://join?{urlencode(params, doseq=True)}"
 
 
 def parse_join_link(link: str) -> Dict[str, Any]:
-    u = urlparse(link)
-    if u.scheme not in ["coithub", "coithub.org"] or u.netloc != "join":
+    parsed = urlparse(link)
+    if parsed.scheme != JOIN_SCHEME or parsed.netloc != "join":
         raise ValueError("invalid_link")
-    qs = parse_qs(u.query)
-    network = qs.get("network", [None])[0]
-    model = qs.get("model", [None])[0]
-    h = qs.get("hash", [None])[0]
-    # Handle base64 with stripped padding
-    def decode_b64(s):
-        if not s:
-            return s
-        # Add padding back if needed
-        missing_padding = len(s) % 4
-        if missing_padding:
-            s += '=' * (4 - missing_padding)
-        return base64.urlsafe_b64decode(s).decode()
-    boots = [decode_b64(b) for b in qs.get("bootstrap", [])]
-    return {"network": network, "model": model, "hash": h, "bootstrap": boots}
+    qs = parse_qs(parsed.query)
+    api_port = qs.get("api_port", [None])[0]
+    return {
+        "network": qs.get("network", [None])[0],
+        "model": qs.get("model", [None])[0],
+        "hash": qs.get("hash", [None])[0],
+        "api_port": int(api_port) if api_port else None,
+        "bootstrap": [_b64decode(item) for item in qs.get("bootstrap", [])],
+    }
 
 
 def sha256_hex_bytes(data: bytes) -> str:
@@ -46,9 +66,7 @@ def chunk_bytes(data: bytes, piece_size: int) -> List[bytes]:
 
 def bitfield_from_pieces(total_pieces: int, have_indices: List[int]) -> List[int]:
     field = [0] * total_pieces
-    for i in have_indices:
-        if 0 <= i < total_pieces:
-            field[i] = 1
+    for index in have_indices:
+        if 0 <= index < total_pieces:
+            field[index] = 1
     return field
-
-

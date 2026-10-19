@@ -1,37 +1,45 @@
-# CohitHub.org
-### Decentralized Intelligence Hub & Model Routing
+# Bee2Bee Web App
 
-CohitHub.org is a minimalist web application designed to act as a secure entrypoint and router between private LLM models in a decentralized mesh network.
+Local web client for a Bee2Bee node. The Express gateway in `api/` connects to the node over WebSocket (default `ws://127.0.0.1:4003`) and exposes `/api/p2p/*` to the React UI.
 
-## Features
-- **Minimalist Design**: Typography-first, high-end aesthetic inspired by modern SaaS platforms.
-- **Model Routing**: Seamlessly switch between different neural points and specialized models.
-- **Mesh Synchronization**: Real-time telemetry and health monitoring of network nodes.
-- **Secure Communication**: End-to-end encrypted protocol paths.
+## Development
 
-## Technologies
-- **Core**: React 18, TypeScript, Vite
-- **Styling**: Tailwind CSS v4, Framer Motion
-- **Icons**: Lucide React
+```bash
+npm install
+npm run dev
+```
 
-## Getting Started
+- UI: <http://localhost:3000>
+- Gateway: <http://127.0.0.1:3001>
+- Node: <http://127.0.0.1:4002>
 
-1. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
+Vite proxies `/api` to the gateway.
 
-2. **Run Development Server**:
-   ```bash
-   npm run dev
-   ```
+## Production-style local build
 
-3. **Build for Production**:
-   ```bash
-   npm run build
-   ```
+```bash
+npm run local
+```
 
-## Configuration
-Access the **Nexus Core Settings** via the gear icon in the sidebar to configure your protocol endpoint and authentication keys.
-- Default API: `http://127.0.0.1:4002`
-- Authentication: `X-API-KEY` header
+Builds `dist/` and serves it from the gateway at <http://127.0.0.1:3001>.
+
+## Environment
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `API_PORT` | `3001` | Gateway port |
+| `API_HOST` | `127.0.0.1` | Gateway bind host |
+| `BEE2BEE_SEEDS` | `ws://127.0.0.1:4003` | Comma-separated node addresses |
+| `BEE2BEE_LOCAL_REGISTRY` | `1` | Read peers from `~/.bee2bee/registry.json` |
+| `BEE2BEE_API_URL` | `http://127.0.0.1:3001` | Vite proxy target |
+
+## Scripts
+
+| Script | Description |
+| --- | --- |
+| `npm run dev` | Vite dev server |
+| `npm run api` | Gateway only |
+| `npm run build` | Build static assets |
+| `npm run preview` | Preview the build |
+| `npm start` | Serve `dist/` + API |
+| `npm run local` | Build, then serve |

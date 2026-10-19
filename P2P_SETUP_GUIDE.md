@@ -1,52 +1,71 @@
-# Chatit.cloud | Node Deployment Guide
+# P2P Setup Guide
 
-This guide outlines how to register different types of models (Ollama, Remote, API-based) into the Chatit.cloud P2P network.
+Bee2Bee nodes talk over WebSocket and discover each other in two ways:
 
-## 1. Running an Ollama Node (Local GPU)
-Ensure Ollama is running and the model is pulled (`ollama pull llama3`).
+1. **Bootstrap address** — one node acts as the meeting point (`BEE2BEE_BOOTSTRAP`, default `ws://127.0.0.1:4003`).
+2. **Local registry** — `~/.bee2bee/registry.json` stores recently seen peers and expires them after `BEE2BEE_REGISTRY_TTL` seconds (default `120`).
 
-```bash
-# Register local Ollama model to the mesh
-python bee2bee/p2p_runtime.py --register \
-  --model llama3 \
-  --provider ollama \
-  --endpoint http://localhost:11434 \
-  --tag "Local-GPU-1"
-```
+There is no hosted registry.
 
-## 2. Running a Remote / Cloud Node (vLLM / TGI)
-Use this for models hosted on runpod, lambda, or your own server.
+## 1. Start the first node
 
 ```bash
-python bee2bee/p2p_runtime.py --register \
-  --model mistralai/Mistral-7B-v0.1 \
-  --provider remote \
-  --endpoint https://your-remote-api.com/v1 \
-  --api-key your_remote_key \
-  --tag "Cloud-H100-Cluster"
+bee2bee serve-ollama --model llama3 --host 0.0.0.0 --port 4003 --api-port 4002
 ```
 
-## 3. Running an API-Gateway Node (OpenAI / Anthropic)
-Register your own API key as a provider for others (or yourself) through the mesh.
+This node prints an invite link such as:
+
+```text
+bee2bee://join?network=bee2bee&model=llama3&bootstrap=d3M6Ly8xOTIuMTY4LjEuMjA6NDAwMw&api_port=4002
+```
+
+## 2. Join from another machine
 
 ```bash
-python bee2bee/p2p_runtime.py --register \
-  --model gpt-4o \
-  --provider openai \
-  --api-key sk-xxxx \
-  --price-per-1k 0.01 \
-  --tag "High-Res-Path"
+bee2bee serve-ollama --model llama3 \
+  --bootstrap "bee2bee://join?network=bee2bee&model=llama3&bootstrap=...&api_port=4002"
 ```
 
-## 4. Discovery & Health
-The `p2p_runtime.py` automatically heartbeats to the central registry. 
-- **Latency Tracking**: The mesh pings each node every 60s.
-- **Auto-Routing**: The Chatit.cloud entrypoint (Web App) prioritizes nodes with the lowest `latency_ms`.
+Or register the peer without serving a model:
 
----
+```bash
+bee2bee register --node-url ws://192.168.1.20:4003
+bee2bee register
+```
 
-## Technical Architecture
-All nodes connect via a unified `bee2bee/p2p_runtime.py` which handles:
-1. **Heartbeat**: Announcements to `Chatit.cloud` registry.
-2. **Telemetry**: Reporting CPU/GPU/RAM usage.
-3. **Execution**: Proxying chat requests to the actual underlying provider.
+## 3. Join from the web app
+
+Open the invite in a browser:
+
+```text
+http://localhost:3000/?link=<url-encoded invite>&api_port=4002
+```
+
+The app registers the node with the local gateway, then offers onboarding for a local model.
+
+## 4. Verify
+
+```bash
+bee2bee status
+curl http://127.0.0.1:4002/health
+curl http://127.0.0.1:4002/peers
+```
+
+## Architecture
+
+| Component | Role |
+| --- | --- |
+| `p2p_runtime.P2PNode` | WebSocket server/client, peer handshake, request routing |
+| `services.OllamaService` | Forwards generation to Ollama and streams tokens |
+| `services.HFService` | Local Transformers inference |
+| `registry.RegistryClient` | File-backed, TTL-based peer discovery |
+| `api.py` | FastAPI endpoints for peers, providers, generation |
+| `tui.py` | Rich terminal dashboard |
+| `app/api/mesh.js` | Browser-facing bridge to one or more nodes |
+
+## Troubleshooting
+
+- **No peers**: check that both machines can reach TCP `4003`, and that the bootstrap address is `ws://`, not `http://`.
+- **Stale peers**: the registry prunes entries older than the TTL; run `bee2bee register` again or restart the node.
+- **NAT traversal**: leave `BEE2BEE_NAT=0` on a LAN. Set `BEE2BEE_NAT=1` only when you need UPnP/STUN discovery.
+- **Peer is offline**: `/providers` lists only currently reachable peers.

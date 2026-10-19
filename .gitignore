@@ -42,17 +42,6 @@ Thumbs.db
 # Project
 *.onnx
 *.pt
-*.ts
-/.connectit/
+/.bee2bee/
 *.log
-
-
-# Allow desktop-app files
-!desktop-app/**/*.ts
-!desktop-app/**/*.tsx
-!desktop-app/**/lib/
-!tauri-app/**/*.ts
-!tauri-app/**/*.tsx
-!tauri-app/**/lib/
-
-egg-info
+*.egg-info/

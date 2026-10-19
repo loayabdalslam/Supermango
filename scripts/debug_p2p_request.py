@@ -16,7 +16,7 @@ async def debug_p2p_request():
     print(f"P2P node started: {node.addr}")
     
     # Connect to bootstrap
-    bootstrap_link = "ws://127.0.0.1:4334"
+    bootstrap_link = "ws://127.0.0.1:4003"
     print(f"Connecting to bootstrap: {bootstrap_link}")
     await node.connect_bootstrap(bootstrap_link)
     

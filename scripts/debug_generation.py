@@ -9,11 +9,11 @@ import websockets
 from bee2bee.p2p_runtime import P2PNode
 
 async def test_direct_generation():
-    """Test generation by connecting directly to the deploy-hf server"""
+    """Test generation by connecting directly to the Bee2Bee node"""
     print("=== Direct Generation Test ===")
     
-    # Connect directly to the running deploy-hf server
-    server_url = "ws://127.0.0.1:4334"
+    # Connect directly to the running Bee2Bee node
+    server_url = "ws://127.0.0.1:4003"
     
     try:
         print(f"Connecting to {server_url}...")
@@ -99,7 +99,7 @@ async def test_p2p_node_generation():
         print(f"Client node started: {node.addr}")
         
         # Connect to bootstrap
-        bootstrap_url = "ws://127.0.0.1:4334"
+        bootstrap_url = "ws://127.0.0.1:4003"
         await node.connect_bootstrap(bootstrap_url)
         print("Connected to bootstrap")
         

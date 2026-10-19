@@ -1,10 +1,9 @@
 
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, status, Header
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from typing import List, Optional
-import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -36,7 +35,7 @@ async def lifespan(app: FastAPI):
     global node
     if node is None:
         # Initialize node on startup with random port or configured port
-        port = int(os.getenv("BEE2BEE_PORT", "4001"))
+        port = int(os.getenv("BEE2BEE_PORT", "4002"))
         host = os.getenv("BEE2BEE_HOST", "0.0.0.0")
         
         announce_host = os.getenv("BEE2BEE_ANNOUNCE_HOST")
@@ -72,11 +71,11 @@ async def lifespan(app: FastAPI):
     bootstrap_addr = f"ws://{display_host}:{node.port}"
     public_bootstrap_addr = f"ws://{public_ip}:{node.port}" if public_ip else None
     
-    console.print("\n[bold yellow]✨ Bee2Bee Node Started Successfully![/bold yellow]")
+    console.print("\n[bold yellow]Bee2Bee Node Started Successfully![/bold yellow]")
     if os.getenv("BEE2BEE_API_KEY"):
-        console.print("[bold green]🔒 API Security Enabled (API Key required)[/bold green]")
+        console.print("[bold green]API Security Enabled (API Key required)[/bold green]")
     else:
-        console.print("[bold red]⚠️  API Security Disabled (No BEE2BEE_API_KEY set)[/bold red]")
+        console.print("[bold red] API Security Disabled (No BEE2BEE_API_KEY set)[/bold red]")
         
     console.print("[dim]To connect other nodes to this network, run:[/dim]")
     console.print(f"   [bold cyan]python -m bee2bee config bootstrap_url {bootstrap_addr}[/bold cyan]")
@@ -128,15 +127,26 @@ def home():
         "status": "ok",
         "node_id": node.peer_id,
         "peer_id": node.peer_id,
-        "region": node.region or "Global",
-        "models": list(set(all_models)),
+        "addr": node.addr,
+        "region": node.region or "Local",
+        "models": sorted(set(all_models)),
         "services": services_meta,
+        "api_port": getattr(node, "api_port", None),
         "metrics": {
-            "uptime": int(time.time() - node.start_time) if hasattr(node, 'start_time') else 0,
+            "uptime": int(time.time() - getattr(node, "start_time", time.time())),
             "pool_size": len(node.peers),
-            "status": "active"
-        }
+            "status": "active",
+        },
     }
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok" if node else "starting",
+        "peer_id": node.peer_id if node else None,
+        "addr": node.addr if node else None,
+    }
+
 
 @app.get("/peers", dependencies=[Depends(get_api_key)])
 def get_peers():
@@ -156,7 +166,10 @@ def get_peers():
             "latency_ms": info.get("last_pong_ms"),
             "health_status": info.get("health_status", "unknown"),
             "last_audit": info.get("last_audit", 0),
-            "metrics": info.get("metrics")
+            "api_port": info.get("api_port"),
+            "api_host": info.get("api_host") or info.get("public_ip"),
+            "region": info.get("region"),
+            "metrics": info.get("metrics"),
         })
     return res
 
@@ -171,10 +184,7 @@ async def connect_peer(addr: str):
     if not node:
         return {"error": "Node not running"}
     try:
-        if addr.startswith("p2pnet"):
-            await node.connect_bootstrap(addr)
-        else:
-            await node._connect_peer(addr)
+        await node.connect_bootstrap(addr)
         return {"status": "connected", "addr": addr}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -237,7 +247,7 @@ async def chat(req: ChatRequest):
                     "text": result.get("text", ""), 
                     "rid": f"local-{int(time.time()*1000)}",
                     "metadata": {
-                        "engine": "coithub-local",
+                        "engine": "bee2bee-local",
                         "node": node.addr,
                         "service": svc_name,
                         "latency_ms": result.get("latency_ms")
@@ -257,7 +267,7 @@ async def chat(req: ChatRequest):
             "text": res.get("text", ""), 
             "rid": res.get("rid"),
             "metadata": {
-                "engine": "coithub-p2p",
+                "engine": "bee2bee-p2p",
                 "node": node.addr,
                 "latency_ms": res.get("latency_ms")
             }

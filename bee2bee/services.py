@@ -41,11 +41,11 @@ class HFService(BaseService):
         self._load_model()
 
     def _load_model(self):
-        console.log(f"[yellow]🤖 Loading model '{self.model_name}'... (This may take a while)[/yellow]")
+        console.print(f"[yellow]Loading model '{self.model_name}'... (This may take a while)[/yellow]")
         try:
             from .hf import load_model_and_tokenizer
             self.model, self.tokenizer, self.device = load_model_and_tokenizer(self.model_name)
-            console.log(f"[green]✓ Model '{self.model_name}' loaded successfully[/green]")
+            console.print(f"[green]Model '{self.model_name}' loaded successfully[/green]")
         except ImportError:
             raise ServiceError("transformers not installed")
         except Exception as e:
@@ -144,11 +144,11 @@ class OllamaService(BaseService):
             
             if not found:
                  # Try pull? For now just warn or error.
-                 console.log(f"[yellow]⚠️ Model '{self.model_name}' not found in Ollama '{self.host}'.[/yellow]")
-                 console.log(f"[dim]Available: {models}[/dim]")
+                 console.print(f"[yellow]Model '{self.model_name}' not found in Ollama '{self.host}'.[/yellow]")
+                 console.print(f"[dim]Available: {models}[/dim]")
                  # Fallback to first model if list is small? No, stay on model_name but warn
             else:
-                 console.log(f"[green]✓ Ollama Model '{self.model_name}' ready (mapped to {self.actual_model})[/green]")
+                 console.print(f"[green]Ollama Model '{self.model_name}' ready (mapped to {self.actual_model})[/green]")
                  
         except Exception as e:
             raise ServiceError(f"Ollama connection failed: {e}")
@@ -224,25 +224,26 @@ class OllamaService(BaseService):
         try:
             res = requests.post(f"{self.host}/api/generate", json=payload, stream=True, timeout=300)
             if res.status_code != 200:
-                yield json.dumps({"error": f"Ollama Error: {res.text}"})
+                yield json.dumps({"status": "error", "message": f"Ollama Error: {res.text}"}) + "\n"
                 return
 
             for line in res.iter_lines():
-                if line:
-                    decoded = line.decode('utf-8')
-                    try:
-                        data = json.loads(decoded)
-                        # Yield the specific chunk of text
-                        chunk = data.get("response", "")
-                        if chunk:
-                            yield chunk
-                        
-                        if data.get("done"):
-                            break
-                    except:
-                        continue
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line.decode("utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                chunk = data.get("response", "")
+                if chunk:
+                    yield json.dumps({"text": chunk}) + "\n"
+                if data.get("done"):
+                    break
+
+            yield json.dumps({"done": True}) + "\n"
         except Exception as e:
-            yield json.dumps({"error": str(e)})
+            logger.error(f"Ollama stream failed: {e}")
+            yield json.dumps({"status": "error", "message": str(e)}) + "\n"
 
 class HFRemoteService(BaseService):
     def __init__(self, model_name: str, token: Optional[str] = None, price_per_token: float = 0.005):

@@ -13,7 +13,7 @@ async def test_generation():
     print("Node started")
     
     # Connect to bootstrap
-    await node.connect_bootstrap('ws://127.0.0.1:4334')
+    await node.connect_bootstrap('ws://127.0.0.1:4003')
     print("Connected to bootstrap")
     
     # Wait for provider discovery

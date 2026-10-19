@@ -9,7 +9,7 @@ import json
 import time
 
 async def test_full_request():
-    uri = "ws://127.0.0.1:4334"
+    uri = "ws://127.0.0.1:4003"
     print(f"Connecting to {uri}...")
     
     try:

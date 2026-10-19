@@ -1,8 +1,8 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 @theme {
-  --font-sans: 'Inter', sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   --color-primary: #000000;
   --color-accent: #000000;
   --color-bg: #ffffff;
@@ -64,7 +64,6 @@ body {
 }
 
 /* Markdown & AI Response Styling */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 .prose-minimal {
   @apply text-[15px] leading-[1.8] text-black font-normal;
