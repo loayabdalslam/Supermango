@@ -136,6 +136,19 @@ const getStatus = async (req, res) => {
   });
 };
 
+app.post('/api/heartbeat', (req, res) => {
+  const expected = process.env.BEE2BEE_HEARTBEAT_TOKEN;
+  if (expected && req.headers.authorization !== `Bearer ${expected}`) {
+    return res.status(401).json({ error: 'Invalid heartbeat token' });
+  }
+  const nodes = bridge.ingestHeartbeat(req.body);
+  res.json({ updated_at: Date.now(), nodes });
+});
+
+app.get('/api/heartbeat', (req, res) => {
+  res.json({ updated_at: bridge.heartbeatUpdatedAt, nodes: bridge.listHeartbeats() });
+});
+
 app.get('/api/p2p/status', getStatus);
 
 app.post('/api/p2p/status', async (req, res) => {

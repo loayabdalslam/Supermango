@@ -376,9 +376,10 @@ class PortForwarder:
             # Update message length (excluding header)
             request[2:4] = struct.pack("!H", len(request) - 20)
             
-            # Send request
+            # Send request. The P2P server already owns local_port, so use an
+            # ephemeral source port for the STUN probe.
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.bind(('0.0.0.0', local_port))
+            sock.bind(('0.0.0.0', 0))
             sock.settimeout(5.0)
             sock.sendto(request, (server, server_port))
             

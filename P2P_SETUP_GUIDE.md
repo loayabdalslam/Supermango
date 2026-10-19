@@ -67,5 +67,6 @@ curl http://127.0.0.1:4002/peers
 
 - **No peers**: check that both machines can reach TCP `4003`, and that the bootstrap address is `ws://`, not `http://`.
 - **Stale peers**: the registry prunes entries older than the TTL; run `bee2bee register` again or restart the node.
-- **NAT traversal**: leave `BEE2BEE_NAT=0` on a LAN. Set `BEE2BEE_NAT=1` only when you need UPnP/STUN discovery.
+- **NAT traversal**: `BEE2BEE_NAT=1` is the default. The node tries UPnP, NAT-PMP, PCP, then STUN and advertises its real public IP; it falls back to the LAN address when automatic mapping fails. Set `BEE2BEE_NAT=0` to stay LAN-only.
+- **Heartbeat**: the default endpoint is `http://localhost:3000/api/heartbeat`, so nodes report to the local web app with no setup. Override `BEE2BEE_HEARTBEAT_URL` (plus optional `BEE2BEE_HEARTBEAT_TOKEN`) to use your own server. The latest response is stored in `~/.bee2bee/heartbeat.json` and drives the node table in the web app.
 - **Peer is offline**: `/providers` lists only currently reachable peers.

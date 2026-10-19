@@ -21,12 +21,12 @@ app.use((req, res) => {
 });
 
 const PORT = Number(process.env.API_PORT || process.env.PORT || 3001);
-const HOST = process.env.API_HOST || '127.0.0.1';
+const HOST = process.env.API_HOST || '0.0.0.0';
 
 bridge.connect();
 
 const server = app.listen(PORT, HOST, () => {
-  console.log(`Bee2Bee local gateway: http://${HOST}:${PORT}`);
+  console.log(`Bee2Bee gateway: http://${HOST}:${PORT}`);
   console.log(`UI: ${fs.existsSync(INDEX_FILE) ? 'serving app/dist' : 'run "npm run dev" for the Vite UI'}`);
   console.log('Endpoints: /api/p2p/register, /api/p2p/generate, /api/p2p/status');
 });

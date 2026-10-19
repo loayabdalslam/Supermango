@@ -13,6 +13,7 @@ from rich.console import Console
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.asyncio.server import Response, ServerConnection, serve
 
+from .heartbeat import HeartbeatClient
 from .nat import auto_port_forward, get_public_ip, try_stun
 from .p2p import generate_join_link, parse_join_link, sha256_hex_bytes
 from .registry import RegistryClient
@@ -38,6 +39,17 @@ class P2PNode:
         self.registry = RegistryClient(entrypoint_url=entrypoint_url)
         self.region = region
         self.start_time = time.time()
+        try:
+            latitude = float(os.getenv("BEE2BEE_LATITUDE", ""))
+        except ValueError:
+            latitude = None
+        try:
+            longitude = float(os.getenv("BEE2BEE_LONGITUDE", ""))
+        except ValueError:
+            longitude = None
+        self.latitude = latitude
+        self.longitude = longitude
+        self.heartbeat = HeartbeatClient(self)
         
         # We'll set self.addr after start() once we know the port
         self.addr = "" 
@@ -201,9 +213,11 @@ class P2PNode:
             display_host = get_lan_ip()
             logger.info(f"Detected LAN IP: {display_host}")
 
-            # Public/NAT discovery is opt-in. The local web app only needs LAN
-            # connectivity, and probing routers at startup slows it down.
-            if os.getenv("BEE2BEE_NAT", "0").lower() in {"1", "true", "yes"}:
+            # Public networking is the default. The node advertises its real
+            # public IP so peers on other networks can reach it.
+            nat_enabled = os.getenv("BEE2BEE_NAT", "1").lower() not in {"0", "false", "no"}
+            public_ip = os.getenv("BEE2BEE_PUBLIC_IP")
+            if nat_enabled and not public_ip:
                 console.print(f"[dim]Attempting auto port forwarding for port {self.port}...[/dim]")
                 forward_result = None
                 try:
@@ -231,6 +245,10 @@ class P2PNode:
                                 )
                     except Exception as exc:
                         logger.warning(f"STUN discovery failed: {exc}")
+
+            if public_ip:
+                display_host = public_ip
+                console.print(f"[cyan]Advertising public IP: {display_host}[/cyan]")
         else:
             display_host = self.host
             console.print(f"[cyan]Using host: {display_host}[/cyan]")
@@ -247,7 +265,14 @@ class P2PNode:
         
         # Store the public IP for API access
         self.public_host = display_host
-        
+
+        # Push node state to the optional heartbeat server. This also pulls
+        # map coordinates for every node back into the local web gateway.
+        try:
+            await self.heartbeat.start()
+        except Exception as exc:
+            logger.warning(f"Heartbeat start failed: {exc}")
+
         # Start monitoring loop
         self._monitor_active = True
         asyncio.create_task(self._monitoring_loop(15))
@@ -260,7 +285,12 @@ class P2PNode:
         console.print(f"[yellow]Stopping P2P Node...[/yellow]")
         self._running = False
         self._monitor_active = False
-        
+
+        try:
+            await self.heartbeat.stop()
+        except Exception:
+            pass
+
         if self.server:
             self.server.close()
             await self.server.wait_closed()
@@ -870,6 +900,9 @@ async def run_p2p_node(
     node.api_host = node.announce_host or node.host
 
     await node.start()
+
+    # Prefer the address peers can actually reach once the node is started.
+    node.api_host = node.announce_host or getattr(node, "public_host", None) or node.host
 
     if api_port:
         import bee2bee.api

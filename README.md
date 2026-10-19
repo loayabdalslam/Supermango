@@ -1,11 +1,11 @@
 # Bee2Bee
 
-**Bee2Bee** is a local-first, peer-to-peer mesh for running AI inference on machines you control. A node can serve Ollama or Hugging Face models, and clients can chat with it through either:
+**Bee2Bee** is a peer-to-peer mesh for running AI inference on machines you control. Every node binds all interfaces, advertises its real public IP (UPnP/STUN with LAN fallback), and posts a full heartbeat to the local web app at `localhost:3000` by default. A node can serve Ollama or Hugging Face models, and clients can chat with it through either:
 
-- a **local web app** (React + Express), or
+- a **web app** (React + Express) with a live table of every node in the mesh, or
 - a **terminal dashboard (TUI)** built with Rich.
 
-There is no hosted dashboard, no account system, and no remote registry. Nodes announce themselves over WebSocket, and a small local JSON file (`~/.bee2bee/registry.json`) helps peers rediscover each other after a restart.
+There is no account system and no hosted registry. Nodes announce themselves over WebSocket, a small local JSON file (`~/.bee2bee/registry.json`) helps peers rediscover each other after a restart, and heartbeats keep the node table current.
 
 ---
 
@@ -81,16 +81,45 @@ cd app
 npm run dev
 ```
 
-Open <http://localhost:3000>. The Vite dev server proxies `/api` to the local Express gateway on port `3001`, which connects to the node at `ws://127.0.0.1:4003`.
+Open <http://localhost:3000>. `npm run dev` starts the Vite UI and the Express gateway together; Vite proxies `/api` to the gateway on port `3001`, which connects to the node at `ws://127.0.0.1:4003`. Both the gateway and the Python node bind `0.0.0.0` by default, so other machines can reach them on your LAN or public IP.
 
-For a production-style local build:
+For a production-style build:
 
 ```bash
 cd app
 npm run local
 ```
 
-This builds the UI and serves it from the Express gateway at <http://127.0.0.1:3001>.
+This builds the UI and serves it from the Express gateway at <http://127.0.0.1:3001>. The dashboard shows a live table of every node reported through the heartbeat.
+
+### 4. Heartbeats and the node table
+
+Heartbeats point at the local web app by default, so no configuration is needed while Vite is running:
+
+```text
+http://localhost:3000/api/heartbeat
+```
+
+Every `BEE2BEE_HEARTBEAT_INTERVAL` seconds (default `30`) the node POSTs its identity, public IP, models, services, metrics, and coordinates, then reads the full node list back from the response. The gateway stores the list in memory and the latest response is written to `~/.bee2bee/heartbeat.json`, which the web app reads for the table.
+
+When `BEE2BEE_HEARTBEAT_URL` is not set, the node tries the local app in order and sticks with the first one that answers:
+
+```text
+http://localhost:3000/api/heartbeat
+http://localhost:3001/api/heartbeat
+```
+
+That means the table fills in both dev mode (Vite on `3000`) and the built app served by the gateway (`npm run local` on `3001`) without any configuration. Set `BEE2BEE_HEARTBEAT_URL` explicitly to pin a single endpoint.
+
+To use a remote server instead:
+
+```bash
+export BEE2BEE_HEARTBEAT_URL=https://heartbeat.example.com/nodes
+export BEE2BEE_HEARTBEAT_TOKEN=optional-bearer-token
+bee2bee api --port 4002 --p2p-port 4003
+```
+
+The node understands several common response shapes (a top-level array, `{ nodes: [...] }`, `{ peers: [...] }`, `{ data: { nodes: [...] } }`, or a single node object). Each node may expose `peer_id`/`id`, `addr`/`url`, `region`, `models`, `api_port`, and `latitude`/`longitude` (also accepted: `lat`/`lng`/`lon`, `location.lat`, `geo`, `coordinates`).
 
 ### One-command demo
 
@@ -182,23 +211,33 @@ Opening that URL registers the peer with the local gateway and shows the onboard
 Copy `.env.example` to `.env` and adjust:
 
 ```ini
+BEE2BEE_HOST=0.0.0.0
 BEE2BEE_PORT=4003
 BEE2BEE_API_PORT=4002
 BEE2BEE_BOOTSTRAP=ws://127.0.0.1:4003
+BEE2BEE_REGION=Auto
 BEE2BEE_LOCAL_REGISTRY=1
 BEE2BEE_REGISTRY_TTL=120
-BEE2BEE_NAT=0
+BEE2BEE_NAT=1
+# BEE2BEE_PUBLIC_IP=203.0.113.10
+# BEE2BEE_LATITUDE=30.0444
+# BEE2BEE_LONGITUDE=31.2357
+BEE2BEE_HEARTBEAT_URL=http://localhost:3000/api/heartbeat
+# BEE2BEE_HEARTBEAT_TOKEN=change-me
+BEE2BEE_HEARTBEAT_INTERVAL=30
+BEE2BEE_HEARTBEAT_TTL=120
+API_HOST=0.0.0.0
 ```
 
-`BEE2BEE_NAT=0` keeps startup local: no UPnP/STUN probing. Set it to `1` when you want the node to try to become reachable from outside your LAN.
+`BEE2BEE_NAT=1` is the default: the node tries UPnP, NAT-PMP, PCP, then STUN to advertise its real public IP, falling back to the LAN address when the router blocks automatic mapping. Set it to `0` to stay LAN-only, or set `BEE2BEE_PUBLIC_IP` to advertise a known address without probing. `BEE2BEE_HEARTBEAT_TTL` controls how long the gateway keeps heartbeat nodes in the table.
 
 ## Project layout
 
 ```text
-bee2bee/            Python package: P2P runtime, API, services, TUI
-app/                Local web app (React + Vite + Express gateway)
+bee2bee/            Python package: P2P runtime, heartbeat, API, services, TUI
+app/                Web app (React + Vite + Express gateway)
   api/              Mesh bridge and HTTP gateway
-  src/              UI components and invite-link helpers
+  src/              UI components, mesh node table, and invite-link helpers
 tests/              Python tests
 scripts/            Ad-hoc debugging helpers
 ```
@@ -218,7 +257,9 @@ npm run build
 
 ## Privacy
 
-The default configuration stores no chat data outside the browser tab and no telemetry is sent anywhere. The local registry only contains node addresses, models, region, and basic metrics.
+The default configuration stores no chat data outside the browser tab. The local registry only contains node addresses, models, region, and basic metrics.
+
+Each node sends its full state (identity, addresses, public IP, models, services, metrics, and coordinates) to the heartbeat endpoint on a timer. The default is the local web app on `localhost:3000`, so nothing leaves the machine unless you point `BEE2BEE_HEARTBEAT_URL` at a remote server.
 
 ## License
 

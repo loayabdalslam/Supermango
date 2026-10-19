@@ -63,7 +63,7 @@ Any host that supports a persistent process works:
 - a VPS with Docker,
 - Fly.io / Railway / Render using the Dockerfile (TCP and WebSocket support required).
 
-If you need peers outside your LAN to connect, either forward TCP `4003` on your router or set `BEE2BEE_NAT=1` to let the node attempt UPnP/STUN discovery.
+Peers outside your LAN connect through the node's real public IP. `BEE2BEE_NAT=1` is the default, so the node attempts UPnP/NAT-PMP/PCP/STUN discovery before falling back to the LAN address. Use `BEE2BEE_PUBLIC_IP` to advertise a known address, or forward TCP `4003` manually. Set `BEE2BEE_HEARTBEAT_URL` if you want nodes to report status and map coordinates to your own heartbeat server.
 
 ## Ports
 

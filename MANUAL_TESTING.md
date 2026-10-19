@@ -68,6 +68,7 @@ npm run dev
 2. Enter a node address (`ws://127.0.0.1:4003`) or an invite link.
 3. Open the dashboard and send a message; tokens should stream.
 4. Check `GET http://127.0.0.1:3001/api/health` and `GET /api/p2p/status`.
+5. The mesh node table should list peers with region, address, models, coordinates, and last-seen time.
 
 ## 6. Invite link
 
@@ -90,7 +91,29 @@ bee2bee status
 
 The entry should be pruned.
 
-## 8. Regression suite
+## 8. Heartbeat and node table
+
+Start the web app and a node; the node uses `http://localhost:3000/api/heartbeat` by default:
+
+```bash
+cd app && npm run dev
+bee2bee api --port 4002 --p2p-port 4003
+```
+
+Check:
+
+- `~/.bee2bee/heartbeat.json` exists and contains `self` and `nodes`.
+- `curl http://127.0.0.1:4002/` includes the `heartbeat` block and `public_ip`.
+- `GET /api/p2p/status` includes heartbeat nodes and the dashboard table lists them.
+- The TUI keeps running when the heartbeat server is unavailable (it logs once in the events panel, not over the screen).
+
+To use another heartbeat server:
+
+```bash
+BEE2BEE_HEARTBEAT_URL=http://127.0.0.1:8080/nodes bee2bee api --port 4002 --p2p-port 4003
+```
+
+## 9. Regression suite
 
 ```bash
 pytest

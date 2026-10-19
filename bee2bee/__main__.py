@@ -26,7 +26,7 @@ console = Console()
 
 @click.group()
 def cli():
-    """Bee2Bee: local-first P2P mesh for AI inference."""
+    """Bee2Bee: real-IP P2P mesh for AI inference."""
 
 
 @cli.command("serve-ollama")
@@ -34,7 +34,7 @@ def cli():
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=0, type=int, help="P2P bind port")
 @click.option("--public-host", default=None, help="Address advertised to peers")
-@click.option("--region", default="Local", help="Region label")
+@click.option("--region", default="Auto", help="Region label")
 @click.option("--api-port", default=4002, type=int, help="Local HTTP API port")
 @click.option("--endpoint", default=None, help="Ollama endpoint (default http://localhost:11434)")
 def serve_ollama(model, host, port, public_host, region, api_port, endpoint):
@@ -58,7 +58,7 @@ def serve_ollama(model, host, port, public_host, region, api_port, endpoint):
 @click.option("--model", default="distilgpt2", help="Hugging Face model name")
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=0, type=int, help="P2P bind port")
-@click.option("--region", default="Local", help="Region label")
+@click.option("--region", default="Auto", help="Region label")
 @click.option("--api-port", default=4002, type=int, help="Local HTTP API port")
 def serve_hf(model, host, port, region, api_port):
     """Serve a local Hugging Face model to the mesh."""
@@ -96,7 +96,7 @@ def serve_hf_remote(model, token, region, api_port):
 
 
 @cli.command("api")
-@click.option("--host", default="127.0.0.1", help="Bind host")
+@click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=4002, type=int, help="HTTP API port")
 @click.option("--p2p-port", default=4003, type=int, help="P2P WebSocket port")
 def api_command(host, port, p2p_port):
@@ -114,8 +114,8 @@ def api_command(host, port, p2p_port):
 @cli.command()
 @click.option("--model", default=None, help="Model to serve (optional)")
 @click.option("--backend", default="ollama", type=click.Choice(["ollama", "hf", "hf_remote"]))
-@click.option("--region", default="Local", help="Region label")
-@click.option("--host", default="127.0.0.1", help="Bind host")
+@click.option("--region", default="Auto", help="Region label")
+@click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=4003, type=int, help="P2P bind port")
 @click.option("--api-port", default=4002, type=int, help="Local HTTP API port")
 @click.option("--endpoint", default=None, help="Backend endpoint (Ollama)")
@@ -140,7 +140,7 @@ def tui(model, backend, region, host, port, api_port, endpoint, bootstrap):
 
 @cli.command()
 @click.option("--node-url", default=None, help="Register a specific ws:// address")
-@click.option("--region", default="Local", help="Region label")
+@click.option("--region", default="Auto", help="Region label")
 def register(node_url, region):
     """Show the local registry or add a node address to it."""
 

@@ -1,11 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity, Cpu, Layers, Send, Settings, Terminal, X, Zap } from 'lucide-react';
+import {
+  Activity,
+  ArrowLeft,
+  Cpu,
+  Layers,
+  Send,
+  Settings2,
+  Sparkles,
+  Table2,
+  Terminal,
+  X,
+  Zap,
+} from 'lucide-react';
+import MeshTable from './MeshTable';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import 'highlight.js/styles/github.css';
+import 'highlight.js/styles/github-dark.css';
 import 'katex/dist/katex.min.css';
 
 export default function Dashboard({
@@ -24,6 +37,7 @@ export default function Dashboard({
 }) {
   const [input, setInput] = useState('');
   const [showStats, setShowStats] = useState(false);
+  const [showNodes, setShowNodes] = useState(true);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -37,52 +51,55 @@ export default function Dashboard({
   };
 
   return (
-    <div className="flex h-screen bg-white text-black font-sans selection:bg-black selection:text-white">
+    <div className="flex h-screen bg-ink text-white">
       {showStats && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-white/10 backdrop-blur-xl animate-in fade-in duration-300">
-          <div className="bg-white border border-gray-100 shadow-2xl p-10 rounded-[40px] max-w-xl w-full space-y-8 relative">
-            <button
-              onClick={() => setShowStats(false)}
-              className="absolute top-8 right-8 p-2 hover:bg-gray-100 rounded-full transition-colors"
-              aria-label="Close metrics"
-            >
-              <X className="w-5 h-5 text-gray-400" />
-            </button>
-            <div className="space-y-2">
-              <h2 className="text-3xl font-light tracking-tight">Performance metrics</h2>
-              <p className="text-xs text-gray-400 font-medium uppercase tracking-widest">
-                Local node analysis
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-6">
-              <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Pool size</span>
-                <p className="text-2xl font-semibold mt-1">{networkStats.poolSize} nodes</p>
-              </div>
-              <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Active model</span>
-                <p className="text-2xl font-semibold mt-1">{activeModel}</p>
-              </div>
-              <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Session tokens</span>
-                <p className="text-2xl font-semibold mt-1 text-emerald-500">
-                  {tokenConsumption.toLocaleString()}
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6 backdrop-blur-xl animate-fade-scale">
+          <div className="panel w-full max-w-xl space-y-8 p-8 md:p-10">
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <h2 className="text-2xl font-semibold tracking-tight">Performance metrics</h2>
+                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-faint">
+                  Mesh analysis
                 </p>
               </div>
-              <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Primary ingress</span>
-                <p className="text-sm font-mono mt-1 break-all">
-                  {networkStats.activeNode || 'local node'}
-                </p>
-              </div>
+              <button
+                onClick={() => setShowStats(false)}
+                className="grid h-9 w-9 place-items-center rounded-full border border-line text-muted transition-colors hover:text-white"
+                aria-label="Close metrics"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <div className="space-y-4 pt-4 border-t border-gray-100">
+
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: 'Pool size', value: `${networkStats.poolSize} nodes` },
+                { label: 'Active model', value: activeModel },
+                { label: 'Session tokens', value: tokenConsumption.toLocaleString(), accent: true },
+                { label: 'Primary ingress', value: networkStats.activeNode || 'mesh node', mono: true },
+              ].map((item) => (
+                <div key={item.label} className="rounded-2xl border border-line bg-white/[0.02] p-5">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
+                    {item.label}
+                  </span>
+                  <p
+                    className={`mt-1.5 text-lg font-semibold ${
+                      item.accent ? 'text-emerald-400' : ''
+                    } ${item.mono ? 'break-all font-mono text-[12px] text-muted' : ''}`}
+                  >
+                    {item.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-5 border-t border-line pt-6">
               <div className="space-y-2">
-                <div className="flex justify-between items-center px-1">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
                     Output limit (tokens)
                   </span>
-                  <span className="text-xs font-mono font-bold">{genSettings.maxTokens}</span>
+                  <span className="font-mono text-xs font-semibold text-white">{genSettings.maxTokens}</span>
                 </div>
                 <input
                   type="range"
@@ -93,15 +110,15 @@ export default function Dashboard({
                   onChange={(event) =>
                     setGenSettings({ ...genSettings, maxTokens: parseInt(event.target.value, 10) })
                   }
-                  className="w-full h-1 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-black"
+                  className="h-1 w-full cursor-pointer appearance-none rounded-lg bg-line accent-accent"
                 />
               </div>
               <div className="space-y-2">
-                <div className="flex justify-between items-center px-1">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
                     Temperature
                   </span>
-                  <span className="text-xs font-mono font-bold">{genSettings.temperature}</span>
+                  <span className="font-mono text-xs font-semibold text-white">{genSettings.temperature}</span>
                 </div>
                 <input
                   type="range"
@@ -112,62 +129,62 @@ export default function Dashboard({
                   onChange={(event) =>
                     setGenSettings({ ...genSettings, temperature: parseFloat(event.target.value) })
                   }
-                  className="w-full h-1 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-black"
+                  className="h-1 w-full cursor-pointer appearance-none rounded-lg bg-line accent-accent"
                 />
               </div>
             </div>
 
-            <div className="pt-4 flex items-center gap-3 text-emerald-500">
-              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-              <span className="text-[10px] font-bold uppercase tracking-widest">
-                Local mesh synchronized
+            <div className="flex items-center gap-2.5 text-emerald-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em]">
+                Global mesh synchronized
               </span>
             </div>
           </div>
         </div>
       )}
 
-      <aside className="w-16 md:w-64 bg-white border-r border-gray-100 flex flex-col items-center md:items-stretch p-4 transition-all duration-300">
-        <div
-          className="flex items-center gap-3 mb-12 mt-2 px-2 cursor-pointer"
+      <aside className="flex w-16 flex-col border-r border-line bg-surface/40 p-3 transition-all duration-300 md:w-64 md:p-4">
+        <button
+          className="mb-8 mt-1 flex items-center gap-3 px-1 md:px-2"
           onClick={() => onNavigate('landing')}
         >
-          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shrink-0">
-            <Layers className="w-4 h-4 text-white" />
-          </div>
-          <h1 className="font-bold text-sm hidden md:block tracking-tight text-black">Bee2Bee</h1>
-        </div>
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-accent text-ink">
+            <Layers className="h-4 w-4" />
+          </span>
+          <span className="hidden text-sm font-semibold tracking-tight text-white md:block">Bee2Bee</span>
+        </button>
 
-        <div className="flex-1 space-y-2 overflow-y-auto no-scrollbar">
-          <div className="p-3 md:p-4 bg-gray-50 rounded-2xl border border-gray-100">
-            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 hidden md:block">
+        <div className="no-scrollbar flex-1 space-y-2 overflow-y-auto">
+          <div className="rounded-2xl border border-line bg-white/[0.02] p-3 md:p-4">
+            <p className="mb-2 hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-faint md:block">
               Network pool
             </p>
             <div className="flex items-center justify-between">
               <div className="flex flex-col">
-                <span className="text-xl font-light leading-none">{networkStats.poolSize}</span>
-                <span className="text-[8px] font-bold text-gray-400 uppercase md:hidden mt-0.5">nodes</span>
-                <span className="text-[9px] font-bold text-gray-400 uppercase hidden md:block">
+                <span className="text-xl font-semibold leading-none text-white">{networkStats.poolSize}</span>
+                <span className="mt-0.5 text-[9px] font-semibold uppercase text-faint md:hidden">nodes</span>
+                <span className="mt-1 hidden text-[10px] font-semibold uppercase tracking-wide text-faint md:block">
                   Nodes online
                 </span>
               </div>
-              <Activity className="w-4 h-4 text-black hidden md:block opacity-20" />
+              <Activity className="hidden h-4 w-4 text-emerald-400 md:block" />
             </div>
           </div>
 
           <button
             onClick={() => setShowStats(true)}
-            className="w-full p-3 md:p-4 bg-white border border-gray-100 rounded-2xl hover:border-black transition-colors cursor-pointer group text-left"
+            className="group flex w-full items-center gap-3 rounded-2xl border border-line bg-white/[0.02] p-3 text-left transition-colors hover:border-white/20 md:p-4"
           >
-            <div className="flex items-center gap-3">
-              <Zap className="w-4 h-4 text-gray-400 group-hover:text-black" />
-              <span className="text-xs font-medium hidden md:block">Performance</span>
-            </div>
+            <Zap className="h-4 w-4 text-faint group-hover:text-accent" />
+            <span className="hidden text-xs font-medium text-muted group-hover:text-white md:block">
+              Performance
+            </span>
           </button>
 
           {networkStats.peers.length > 0 && (
-            <div className="mt-6 md:block hidden">
-              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-3 px-1">
+            <div className="mt-6 hidden md:block">
+              <p className="mb-3 px-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
                 Discovered nodes
               </p>
               <div className="space-y-1">
@@ -175,12 +192,12 @@ export default function Dashboard({
                   <button
                     key={peer.peer_id || peer.id || peer.addr}
                     onClick={() => onSelectNode?.(peer)}
-                    className="w-full text-left p-2 rounded-xl hover:bg-gray-50 transition-colors"
+                    className="w-full rounded-xl p-2 text-left transition-colors hover:bg-white/[0.04]"
                   >
-                    <span className="block text-[10px] font-bold text-black truncate">
-                      {peer.region || 'Local'} · {(peer.models || [])[0] || 'model'}
+                    <span className="block truncate text-[11px] font-semibold text-white">
+                      {peer.region || 'Auto'} · {(peer.models || [])[0] || 'node'}
                     </span>
-                    <span className="block text-[9px] font-mono text-gray-400 truncate">
+                    <span className="block truncate font-mono text-[10px] text-faint">
                       {peer.addr || peer.id}
                     </span>
                   </button>
@@ -189,92 +206,125 @@ export default function Dashboard({
             </div>
           )}
 
-          <div className="mt-6 md:block hidden">
+          <div className="mt-6 hidden md:block">
             <label
               htmlFor="manual-node"
-              className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-3 px-1 block"
+              className="mb-3 block px-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-faint"
             >
               Direct ingress (optional)
             </label>
-            <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-xl border border-transparent focus-within:border-black/10 transition-all">
-              <Terminal className="w-3 h-3 text-gray-400" />
+            <div className="flex items-center gap-2 rounded-xl border border-line bg-white/[0.02] p-2.5 transition-colors focus-within:border-accent/40">
+              <Terminal className="h-3.5 w-3.5 text-faint" />
               <input
                 id="manual-node"
                 value={manualNode}
                 onChange={(event) => setManualNode(event.target.value)}
                 placeholder="IP:PORT or URL..."
-                className="bg-transparent text-[10px] w-full outline-none font-medium text-black placeholder:text-gray-300"
+                className="w-full bg-transparent text-[11px] font-medium text-white outline-none placeholder:text-faint"
               />
             </div>
           </div>
         </div>
 
-        <div className="mt-auto p-2">
-          <button
-            onClick={() => onNavigate('landing')}
-            className="w-full h-10 bg-gray-50 rounded-xl flex items-center justify-center cursor-pointer hover:bg-black group transition-all"
-            aria-label="Back to landing page"
-          >
-            <Settings className="w-4 h-4 text-gray-400 group-hover:text-white" />
-          </button>
-        </div>
+        <button
+          onClick={() => onNavigate('landing')}
+          className="mt-auto flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.02] text-faint transition-colors hover:text-white"
+          aria-label="Back to landing page"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span className="hidden text-[11px] font-medium md:block">Back</span>
+        </button>
       </aside>
 
-      <main className="flex-1 flex flex-col relative">
-        <header className="h-[100px] border-b border-black/5 flex items-center justify-between px-10 bg-white/80 backdrop-blur-2xl sticky top-0 z-50">
-          <div className="flex items-center gap-10">
-            <div className="flex items-center gap-4">
-              <div
-                className={`w-2.5 h-2.5 rounded-full ${
+      <main className="relative flex flex-1 flex-col">
+        <header className="sticky top-0 z-50 flex h-[88px] items-center justify-between border-b border-line bg-ink/70 px-6 backdrop-blur-2xl md:px-10">
+          <div className="flex items-center gap-8">
+            <div className="flex items-center gap-3.5">
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${
                   networkStats.connected
-                    ? 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.6)]'
-                    : 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.6)]'
-                } animate-pulse`}
+                    ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.7)]'
+                    : 'bg-red-500 shadow-[0_0_14px_rgba(239,68,68,0.7)]'
+                } animate-pulse-dot`}
               />
               <div>
-                <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-0.5">
+                <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">
                   Network status
                 </p>
-                <p className="text-xs font-bold text-black uppercase tracking-tight">
-                  {networkStats.connected ? 'Local mesh synchronized' : 'Local node offline'}
+                <p className="text-xs font-semibold uppercase tracking-tight text-white">
+                  {networkStats.connected ? 'Mesh synchronized' : 'Mesh offline'}
                 </p>
               </div>
             </div>
 
-            <div className="h-10 w-[1px] bg-gray-100 hidden md:block" />
+            <div className="hidden h-9 w-px bg-line md:block" />
 
             <div className="hidden md:block">
-              <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] mb-0.5">
+              <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">
                 Active path
               </p>
               <div className="flex items-center gap-2">
-                <Cpu className="w-3.5 h-3.5 text-black opacity-30" />
-                <span className="text-[11px] font-bold text-black tracking-tight uppercase">
-                  {activeModel}{' '}
-                  <span className="text-gray-300 font-medium ml-2">
-                    ID: {networkStats.activeNode?.substring(0, 18) || 'local'}...
+                <Cpu className="h-3.5 w-3.5 text-accent" />
+                <span className="text-[11px] font-semibold uppercase tracking-tight text-white">
+                  {activeModel}
+                  <span className="ml-2 font-mono font-normal normal-case text-faint">
+                    {networkStats.activeNode?.substring(0, 18) || 'mesh'}
                   </span>
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-full border border-gray-100 flex items-center justify-center bg-gray-50/50">
-              <Settings className="w-4 h-4 text-black opacity-30" />
-            </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowNodes((visible) => !visible)}
+              className={`flex h-10 items-center gap-2 rounded-full border px-4 transition-colors ${
+                showNodes
+                  ? 'border-accent bg-accent text-ink'
+                  : 'border-line bg-white/[0.02] text-muted hover:border-white/20 hover:text-white'
+              }`}
+              aria-label={showNodes ? 'Hide mesh nodes' : 'Show mesh nodes'}
+            >
+              <Table2 className="h-4 w-4 opacity-80" />
+              <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] md:block">
+                {showNodes ? 'Hide nodes' : 'Mesh nodes'}
+              </span>
+            </button>
+            <button
+              onClick={() => setShowStats(true)}
+              className="grid h-10 w-10 place-items-center rounded-full border border-line bg-white/[0.02] text-faint transition-colors hover:text-white"
+              aria-label="Open settings"
+            >
+              <Settings2 className="h-4 w-4" />
+            </button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto pt-12 pb-32 no-scrollbar">
-          <div className="max-w-3xl mx-auto px-6 space-y-12">
+        {showNodes && (
+          <div className="px-4 pt-4 md:px-8">
+            <MeshTable
+              peers={networkStats.peers}
+              activeNode={networkStats.activeNode}
+              onSelectNode={onSelectNode}
+              heartbeatUpdatedAt={networkStats.heartbeatUpdatedAt}
+              heartbeatSource={networkStats.heartbeatSource}
+              className="h-[240px] md:h-[300px]"
+            />
+          </div>
+        )}
+
+        <div className={`no-scrollbar flex-1 overflow-y-auto pb-40 ${showNodes ? 'pt-8' : 'pt-12'}`}>
+          <div className="mx-auto max-w-3xl space-y-10 px-6">
             {messages.length === 0 && (
-              <div className="py-20 text-center space-y-4 animate-in fade-in duration-1000">
-                <h2 className="text-4xl md:text-5xl font-light tracking-tight text-gray-200">
-                  How can Bee2Bee help you?
+              <div className="space-y-4 py-24 text-center animate-fade-scale">
+                <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent/10 text-accent">
+                  <Sparkles className="h-6 w-6" />
+                </span>
+                <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
+                  How can the mesh help you?
                 </h2>
-                <p className="text-xs text-gray-300 font-medium uppercase tracking-[0.2em]">
-                  Local inference · private · permissionless
+                <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-faint">
+                  Private inference · permissionless · peer-to-peer
                 </p>
               </div>
             )}
@@ -284,21 +334,21 @@ export default function Dashboard({
                 key={message.id || index}
                 className={`flex flex-col ${
                   message.role === 'user' ? 'items-end' : 'items-start'
-                } animate-in fade-in slide-in-from-bottom-2 duration-500`}
+                } animate-chat-entry`}
               >
                 <div
-                  className={`flex items-start gap-4 max-w-[85%] md:max-w-[80%] ${
+                  className={`flex max-w-[88%] items-start gap-4 md:max-w-[82%] ${
                     message.role === 'user' ? 'flex-row-reverse' : 'flex-row'
                   }`}
                 >
                   {message.role !== 'user' && (
-                    <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center shrink-0 mt-1 shadow-lg shadow-black/10">
-                      <Cpu className="w-4 h-4 text-white" />
+                    <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent text-ink">
+                      <Cpu className="h-4 w-4" />
                     </div>
                   )}
                   <div className={`w-full ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
                     {message.role === 'user' ? (
-                      <p className="text-[15px] leading-relaxed font-normal whitespace-pre-wrap bg-gray-100 py-3 px-5 rounded-[24px] rounded-tr-none text-black inline-block text-left">
+                      <p className="inline-block whitespace-pre-wrap rounded-[22px] rounded-tr-md border border-line bg-white/[0.05] px-5 py-3 text-left text-[15px] leading-relaxed text-white">
                         {message.text}
                       </p>
                     ) : (
@@ -312,11 +362,11 @@ export default function Dashboard({
                       </div>
                     )}
                     {message.metadata && !message.metadata.streaming && (
-                      <div className="flex items-center gap-3 mt-4 opacity-30">
-                        <span className="text-[8px] font-bold uppercase tracking-widest">
-                          {message.metadata.mode || 'local'}
+                      <div className="mt-3 flex items-center gap-3 text-faint opacity-80">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.16em]">
+                          {message.metadata.mode || 'mesh'}
                         </span>
-                        <span className="text-[8px] font-bold uppercase tracking-widest">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.16em]">
                           {message.metadata.latency
                             ? `${message.metadata.latency}ms`
                             : message.metadata.path || ''}
@@ -329,13 +379,13 @@ export default function Dashboard({
             ))}
 
             {isProcessing && messages[messages.length - 1]?.text === '' && (
-              <div className="flex items-start gap-4 animate-pulse">
-                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                  <Cpu className="w-4 h-4 text-gray-300" />
+              <div className="flex items-start gap-4">
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-line bg-white/[0.02]">
+                  <Cpu className="h-4 w-4 text-faint" />
                 </div>
-                <div className="space-y-2 py-3 w-full">
-                  <div className="h-2 bg-gray-100 rounded-full w-3/4" />
-                  <div className="h-2 bg-gray-100 rounded-full w-1/2" />
+                <div className="w-full space-y-2.5 py-3">
+                  <div className="h-2 w-3/4 animate-pulse rounded-full bg-white/[0.06]" />
+                  <div className="h-2 w-1/2 animate-pulse rounded-full bg-white/[0.06]" />
                 </div>
               </div>
             )}
@@ -343,35 +393,32 @@ export default function Dashboard({
           </div>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0 p-6 md:p-10 bg-gradient-to-t from-white via-white/95 to-transparent pointer-events-none">
-          <div className="max-w-3xl mx-auto pointer-events-auto">
-            <div className="relative group">
-              <div className="absolute inset-0 bg-black/5 rounded-[32px] blur-xl opacity-0 group-focus-within:opacity-100 transition-opacity pointer-events-none" />
-              <div className="relative flex items-center gap-2 p-2 pl-6 bg-[#f0f2f5] border border-transparent focus-within:border-gray-200 focus-within:bg-white rounded-[32px] transition-all duration-300 shadow-sm">
-                <input
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={(event) => event.key === 'Enter' && handleCommit()}
-                  placeholder="Message Bee2Bee..."
-                  className="flex-1 h-12 bg-transparent text-[15px] text-black placeholder:text-gray-400 outline-none"
-                />
-                <button
-                  onClick={handleCommit}
-                  disabled={!input.trim() || isProcessing}
-                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
-                    input.trim() && !isProcessing
-                      ? 'bg-black text-white hover:scale-105 active:scale-95'
-                      : 'bg-transparent text-gray-300 cursor-not-allowed'
-                  }`}
-                  aria-label="Send message"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
-              </div>
-              <p className="text-[9px] text-center text-gray-300 mt-4 font-bold uppercase tracking-widest">
-                Bee2Bee may produce incorrect output. Verify critical results.
-              </p>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink via-ink/95 to-transparent p-6 md:p-10">
+          <div className="pointer-events-auto mx-auto max-w-3xl">
+            <div className="relative flex items-center gap-2 rounded-[26px] border border-line bg-surface/80 p-2 pl-5 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.9)] backdrop-blur-xl transition-colors focus-within:border-accent/40">
+              <input
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => event.key === 'Enter' && handleCommit()}
+                placeholder="Message Bee2Bee..."
+                className="h-12 flex-1 bg-transparent text-[15px] text-white outline-none placeholder:text-faint"
+              />
+              <button
+                onClick={handleCommit}
+                disabled={!input.trim() || isProcessing}
+                className={`grid h-12 w-12 place-items-center rounded-full transition-all ${
+                  input.trim() && !isProcessing
+                    ? 'bg-accent text-ink hover:scale-105 active:scale-95'
+                    : 'cursor-not-allowed bg-white/[0.04] text-faint'
+                }`}
+                aria-label="Send message"
+              >
+                <Send className="h-5 w-5" />
+              </button>
             </div>
+            <p className="mt-3 text-center text-[10px] font-medium uppercase tracking-[0.16em] text-faint">
+              Bee2Bee may produce incorrect output. Verify critical results.
+            </p>
           </div>
         </div>
       </main>

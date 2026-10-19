@@ -128,10 +128,17 @@ def home():
         "node_id": node.peer_id,
         "peer_id": node.peer_id,
         "addr": node.addr,
-        "region": node.region or "Local",
+        "region": node.region or "Auto",
+        "public_ip": getattr(node, "public_host", None),
+        "latitude": getattr(node, "latitude", None),
+        "longitude": getattr(node, "longitude", None),
         "models": sorted(set(all_models)),
         "services": services_meta,
         "api_port": getattr(node, "api_port", None),
+        "heartbeat": {
+            "enabled": node.heartbeat.enabled,
+            "nodes": node.heartbeat.nodes,
+        },
         "metrics": {
             "uptime": int(time.time() - getattr(node, "start_time", time.time())),
             "pool_size": len(node.peers),
@@ -170,6 +177,25 @@ def get_peers():
             "api_host": info.get("api_host") or info.get("public_ip"),
             "region": info.get("region"),
             "metrics": info.get("metrics"),
+        })
+
+    known = {item["peer_id"] for item in res} | {item["addr"] for item in res}
+    for item in node.heartbeat.nodes:
+        if item.get("peer_id") in known or item.get("addr") in known:
+            continue
+        res.append({
+            "peer_id": item.get("peer_id"),
+            "addr": item.get("addr"),
+            "latency_ms": None,
+            "health_status": item.get("status", "online"),
+            "last_audit": item.get("last_seen", 0),
+            "api_port": item.get("api_port"),
+            "api_host": item.get("api_host") or item.get("public_ip"),
+            "region": item.get("region"),
+            "latitude": item.get("latitude"),
+            "longitude": item.get("longitude"),
+            "metrics": item.get("metrics"),
+            "heartbeat": True,
         })
     return res
 

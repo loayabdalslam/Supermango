@@ -16,6 +16,8 @@ const EMPTY_STATS = {
   poolSize: 0,
   activeNode: '',
   peers: [],
+  heartbeatUpdatedAt: 0,
+  heartbeatSource: '',
 };
 
 export default function App() {
@@ -55,6 +57,8 @@ export default function App() {
         poolSize: data.poolSize || peers.length,
         activeNode: data.activeNode || '',
         peers,
+        heartbeatUpdatedAt: data.heartbeatUpdatedAt || 0,
+        heartbeatSource: data.heartbeatSource || '',
       });
     } catch {
       setNetworkStats((previous) => ({ ...previous, connected: false }));
@@ -145,15 +149,15 @@ export default function App() {
       setMessages([
         {
           role: 'ai',
-          text: `### Local link established
-Connected to **${node.region || 'Local'}**.
+          text: `### Mesh link established
+Connected to **${node.region || 'Auto'}**.
 
 - **Peer**: \`${node.peer_id || node.id || 'anonymous'}\`
 - **Path**: \`http://${host}:${port}\`
-- **Invite**: [copy local invite](${invite})
+- **Invite**: [copy mesh invite](${invite})
 
 Status: *synchronized*`,
-          metadata: { mode: 'local-mesh', path: `http://${host}:${port}` },
+          metadata: { mode: 'mesh', path: `http://${host}:${port}` },
         },
       ]);
       setView('dashboard');
@@ -227,14 +231,14 @@ Status: *synchronized*`,
           const { done, value } = await reader.read();
           if (done) break;
           text += decoder.decode(value, { stream: true });
-          updateMessage(text, { mode: manualNode ? 'direct' : 'local-mesh' });
+          updateMessage(text, { mode: manualNode ? 'direct' : 'mesh' });
         }
 
         const tokens = Math.ceil(text.length / 4);
         setTokenConsumption((previous) => previous + Math.max(tokens, 1));
         updateMessage(text, {
           streaming: false,
-          mode: manualNode ? 'direct' : 'local-mesh',
+          mode: manualNode ? 'direct' : 'mesh',
           latency: 0,
         });
       } catch (error) {

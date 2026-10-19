@@ -6,7 +6,9 @@ import WebSocket from 'ws';
 
 const HOME = process.env.BEE2BEE_HOME || path.join(os.homedir(), '.bee2bee');
 const REGISTRY_FILE = path.join(HOME, 'registry.json');
+const HEARTBEAT_FILE = path.join(HOME, 'heartbeat.json');
 const REGISTRY_TTL_MS = Number(process.env.BEE2BEE_REGISTRY_TTL || 120) * 1000;
+const HEARTBEAT_TTL_MS = Number(process.env.BEE2BEE_HEARTBEAT_TTL || 120) * 1000;
 
 function readRegistry() {
   try {
@@ -19,6 +21,21 @@ function readRegistry() {
     });
   } catch {
     return [];
+  }
+}
+
+function readHeartbeat() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(HEARTBEAT_FILE, 'utf8'));
+    const updatedAt = Number(raw?.updated_at) || 0;
+    const nodes = Array.isArray(raw?.nodes) ? raw.nodes : [];
+    const source = raw?.source || null;
+    if (updatedAt && Date.now() - updatedAt > HEARTBEAT_TTL_MS) {
+      return { updatedAt, nodes: [], source };
+    }
+    return { updatedAt, nodes, source };
+  } catch {
+    return { updatedAt: 0, nodes: [], source: null };
   }
 }
 
@@ -41,6 +58,68 @@ function normalizeAddress(address) {
   return `ws://${address}`;
 }
 
+function numberOrNull(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function heartbeatCoordinates(payload) {
+  const location = payload.location && typeof payload.location === 'object' ? payload.location : {};
+  const geo = payload.geo && typeof payload.geo === 'object' ? payload.geo : {};
+  const pair = Array.isArray(payload.coordinates)
+    ? payload.coordinates
+    : Array.isArray(payload.position)
+      ? payload.position
+      : [];
+  return {
+    latitude:
+      numberOrNull(payload.latitude ?? payload.lat ?? location.latitude ?? location.lat ?? geo.latitude ?? geo.lat) ??
+      numberOrNull(pair[1]),
+    longitude:
+      numberOrNull(payload.longitude ?? payload.lng ?? payload.lon ?? location.longitude ?? location.lng ?? geo.longitude ?? geo.lon) ??
+      numberOrNull(pair[0]),
+  };
+}
+
+function normalizeHeartbeatNode(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const peerId = payload.peer_id || payload.node_id || payload.id || payload.key;
+  const rawAddress = payload.addr || payload.address || payload.ws || payload.url;
+  const publicIp = payload.public_ip || payload.ip;
+  const p2pPort = numberOrNull(payload.p2p_port) || 4003;
+  const address = rawAddress
+    ? normalizeAddress(rawAddress)
+    : publicIp
+      ? normalizeAddress(`${publicIp}:${p2pPort}`)
+      : null;
+  if (!peerId && !address) return null;
+
+  const { latitude, longitude } = heartbeatCoordinates(payload);
+  const models = Array.isArray(payload.models)
+    ? payload.models
+    : payload.models
+      ? [payload.models]
+      : [];
+
+  return {
+    peer_id: String(peerId || address),
+    addr: address,
+    region: payload.region || payload.country || payload.city || 'Auto',
+    models: models.map(String),
+    backend: payload.backend,
+    api_port: numberOrNull(payload.api_port ?? payload.metrics?.api_port),
+    api_host: payload.api_host || publicIp || null,
+    public_ip: publicIp || null,
+    latitude,
+    longitude,
+    status: payload.status || 'online',
+    metrics: payload.metrics && typeof payload.metrics === 'object' ? payload.metrics : {},
+    heartbeat: true,
+    heartbeat_url: payload.heartbeat_url || null,
+    last_seen: Date.now(),
+  };
+}
+
 export class MeshBridge {
   constructor(seedNodes = []) {
     this.nodes = new Set(seedNodes.map(normalizeAddress).filter(Boolean));
@@ -55,6 +134,9 @@ export class MeshBridge {
       requests: 0,
       connectedAt: null,
     };
+    this.heartbeatUpdatedAt = 0;
+    this.heartbeatSource = null;
+    this.heartbeatNodes = new Map();
 
     this.connect();
     setInterval(() => {
@@ -85,6 +167,78 @@ export class MeshBridge {
         region: entry.region,
         models: entry.models,
         metrics: entry.metrics,
+      });
+    }
+    this.syncHeartbeat();
+  }
+
+  ingestHeartbeat(payload) {
+    const node = normalizeHeartbeatNode(payload);
+    if (node) {
+      this.heartbeatNodes.set(node.peer_id || node.addr, {
+        node,
+        seenAt: Date.now(),
+      });
+      this.heartbeatUpdatedAt = Date.now();
+      if (node.heartbeat_url) this.heartbeatSource = node.heartbeat_url;
+    }
+    return this.listHeartbeats();
+  }
+
+  listHeartbeats() {
+    const now = Date.now();
+    for (const [key, entry] of this.heartbeatNodes) {
+      if (now - entry.seenAt > HEARTBEAT_TTL_MS) this.heartbeatNodes.delete(key);
+    }
+    return Array.from(this.heartbeatNodes.values()).map((entry) => entry.node);
+  }
+
+  syncHeartbeat() {
+    const { updatedAt, nodes: fileNodes, source } = readHeartbeat();
+    this.heartbeatUpdatedAt = Math.max(updatedAt, this.heartbeatUpdatedAt);
+    if (source) this.heartbeatSource = source;
+    const nodes = [...fileNodes, ...this.listHeartbeats()];
+    const unique = new Map();
+    for (const node of nodes) {
+      const key = node.peer_id || node.addr;
+      if (key) unique.set(key, node);
+    }
+
+    for (const node of unique.values()) {
+      const peerId = node.peer_id || node.id;
+      const address = normalizeAddress(node.addr);
+      let key = address || (peerId ? `heartbeat:${peerId}` : null);
+      if (!key) continue;
+
+      if (peerId) {
+        for (const [knownAddress, meta] of this.peerMetadata) {
+          if (meta.id === peerId) {
+            key = knownAddress;
+            break;
+          }
+        }
+      }
+
+      this._updatePeerMetadata(key, {
+        peer_id: peerId,
+        addr: address || key,
+        region: node.region,
+        models: node.models,
+        metrics: {
+          ...(node.metrics || {}),
+          api_port: node.api_port,
+          api_host: node.api_host,
+          latitude: node.latitude,
+          longitude: node.longitude,
+        },
+        api_port: node.api_port,
+        api_host: node.api_host || node.public_ip,
+        public_ip: node.public_ip,
+        latitude: node.latitude,
+        longitude: node.longitude,
+        status: node.status || 'online',
+        heartbeat: true,
+        last_seen: node.last_seen,
       });
     }
   }
@@ -237,26 +391,35 @@ export class MeshBridge {
     const existing = this.peerMetadata.get(address) || {};
     const services = message.services || {};
     const serviceModels = Object.values(services).flatMap((service) => service.models || []);
+    const messageModels = Array.isArray(message.models) ? message.models : [];
+    const lastSeen = Number(message.last_seen);
     this.peerMetadata.set(address, {
       ...existing,
       id: message.peer_id || existing.id,
-      addr: address,
-      region: message.region || existing.region || 'Local',
-      metrics: message.metrics || existing.metrics || {},
-      models: message.models || (serviceModels.length ? serviceModels : existing.models) || [],
+      addr: message.addr || address,
+      region: message.region || existing.region || 'Auto',
+      metrics: { ...(existing.metrics || {}), ...(message.metrics || {}) },
+      models: messageModels.length
+        ? messageModels
+        : (serviceModels.length ? serviceModels : existing.models) || [],
       backend: message.backend || message.metrics?.backend || existing.backend,
       api_port: message.api_port || message.metrics?.api_port || existing.api_port,
       api_host: message.api_host || message.public_ip || existing.api_host,
       public_ip: message.public_ip || existing.public_ip,
-      status: 'active',
-      last_seen: Date.now(),
+      latitude: message.latitude ?? existing.latitude ?? null,
+      longitude: message.longitude ?? existing.longitude ?? null,
+      status: message.status || existing.status || 'active',
+      heartbeat: message.heartbeat ?? existing.heartbeat ?? false,
+      last_seen: lastSeen
+        ? (lastSeen < 1e12 ? lastSeen * 1000 : lastSeen)
+        : Date.now(),
     });
   }
 
   getRegionalMesh() {
     const mesh = {};
     for (const meta of this.peerMetadata.values()) {
-      const region = meta.region || 'Local';
+      const region = meta.region || 'Auto';
       (mesh[region] ||= []).push({
         ...meta,
         latency: Number.isFinite(meta.metrics?.latency) ? meta.metrics.latency : 0,
@@ -381,12 +544,15 @@ export class MeshBridge {
   }
 
   getStats() {
+    this.syncHeartbeat();
     return {
       connected: this.connected,
       activeNode: this.activeUrl,
       poolSize: this.peerMetadata.size,
       peers: Array.from(this.peerMetadata.values()),
       mesh: this.getRegionalMesh(),
+      heartbeatUpdatedAt: this.heartbeatUpdatedAt,
+      heartbeatSource: this.heartbeatSource,
       uptime: Date.now() - this.stats.startedAt,
       requests: this.stats.requests,
     };

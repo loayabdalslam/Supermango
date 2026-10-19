@@ -100,7 +100,10 @@ class Dashboard:
         table.add_row("peer id", self.node.peer_id)
         table.add_row("address", self.node.addr or "-")
         table.add_row("region", self.node.region)
-        table.add_row("api", f"http://{self.node.host}:{getattr(self.node, 'api_port', '-')}")
+        table.add_row(
+            "api",
+            f"http://{getattr(self.node, 'api_host', None) or self.node.host}:{getattr(self.node, 'api_port', '-')}",
+        )
         table.add_row("uptime", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
         table.add_row("cpu load", f"{metrics.get('throughput', 0)} %")
         table.add_row("memory", f"{metrics.get('memory_percent', 0)} %")
@@ -202,20 +205,25 @@ async def _chat(node: P2PNode, model_name: Optional[str]) -> None:
 async def run_tui(
     model_name: Optional[str] = None,
     backend: str = "ollama",
-    region: str = "Local",
-    host: str = "127.0.0.1",
+    region: str = "Auto",
+    host: str = "0.0.0.0",
     port: int = 4003,
     api_port: Optional[int] = 4002,
     endpoint: Optional[str] = None,
     bootstrap: Optional[str] = None,
 ) -> None:
+    # A stderr handler would write over the Rich Live screen. Route logs to the
+    # dashboard events panel and the log file only.
+    logger.remove()
     logger.add(_log_sink, level="INFO", format="{message}")
+    logger.add("bee2bee.log", rotation="10 MB", level="DEBUG")
 
     node = P2PNode(host=host, port=port, region=region)
     node.api_port = api_port or 0
     node.api_host = host
 
     await node.start()
+    node.api_host = getattr(node, "public_host", None) or host
 
     if api_port:
         import bee2bee.api
