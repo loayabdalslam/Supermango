@@ -53,9 +53,29 @@ function decodeBootstrap(value) {
 function normalizeAddress(address) {
   if (!address) return null;
   if (address.startsWith('http://')) return address.replace('http://', 'ws://');
-  if (address.startsWith('https://')) return address.replace('https://', 'wss://');
+  if (address.startsWith('https://')) return address.replace('https://', 'ws://');
   if (address.startsWith('ws://') || address.startsWith('wss://')) return address;
   return `ws://${address}`;
+}
+
+function splitHostPort(address) {
+  const withoutScheme = String(address).replace(/^[a-z]+:\/\//i, '');
+  const slash = withoutScheme.indexOf('/');
+  const hostPort = slash === -1 ? withoutScheme : withoutScheme.slice(0, slash);
+  const ipv6 = hostPort.match(/^\[(.+)\]:(\d+)$/);
+  if (ipv6) return { host: ipv6[1], port: ipv6[2] };
+  const [host, port] = hostPort.split(':');
+  return { host, port };
+}
+
+function machineLocalHosts() {
+  const hosts = new Set(['127.0.0.1', 'localhost', '::1']);
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const info of list || []) {
+      if (info.family === 'IPv4') hosts.add(info.address);
+    }
+  }
+  return hosts;
 }
 
 function numberOrNull(value) {
@@ -137,6 +157,8 @@ export class MeshBridge {
     this.heartbeatUpdatedAt = 0;
     this.heartbeatSource = null;
     this.heartbeatNodes = new Map();
+    this.publicHosts = new Set();
+    this._localInterfaceHosts = null;
 
     this.connect();
     setInterval(() => {
@@ -150,11 +172,52 @@ export class MeshBridge {
     return !!this.activeWs && this.activeWs.readyState === WebSocket.OPEN;
   }
 
+  _isLocalHost(host) {
+    if (!host) return false;
+    if (host === '127.0.0.1' || host === 'localhost' || host === '::1') return true;
+    if (!this._localInterfaceHosts) this._localInterfaceHosts = machineLocalHosts();
+    return this._localInterfaceHosts.has(host) || this.publicHosts.has(host);
+  }
+
+  _notePublicHost(host) {
+    if (host && host !== '0.0.0.0' && host !== '::') this.publicHosts.add(host);
+  }
+
+  /**
+   * A node can advertise its public IP while the gateway runs on the same
+   * machine. Routers often refuse to hairpin that public address, so try the
+   * loopback twin first whenever the host belongs to this machine.
+   */
+  _localFirst(address) {
+    const normalized = normalizeAddress(address);
+    if (!normalized) return [];
+    const { host, port } = splitHostPort(normalized);
+    const fallbackPort = port || '4003';
+    if (this._isLocalHost(host) && host !== '127.0.0.1' && host !== 'localhost') {
+      const twin = /^wss:\/\//i.test(normalized)
+        ? `wss://127.0.0.1:${fallbackPort}`
+        : `ws://127.0.0.1:${fallbackPort}`;
+      return [twin, normalized];
+    }
+    return [normalized];
+  }
+
   _seedAddresses() {
     const registered = readRegistry()
       .map((entry) => normalizeAddress(entry.addr))
       .filter(Boolean);
-    return [...new Set([...registered, ...Array.from(this.nodes)])];
+    const base = [...new Set([...registered, ...Array.from(this.nodes)])];
+    const expanded = [];
+    const seen = new Set();
+    for (const address of base) {
+      for (const candidate of this._localFirst(address)) {
+        if (!seen.has(candidate)) {
+          seen.add(candidate);
+          expanded.push(candidate);
+        }
+      }
+    }
+    return expanded;
   }
 
   syncLocalRegistry() {
@@ -181,6 +244,8 @@ export class MeshBridge {
       });
       this.heartbeatUpdatedAt = Date.now();
       if (node.heartbeat_url) this.heartbeatSource = node.heartbeat_url;
+      this._notePublicHost(payload?.public_ip);
+      this._notePublicHost(payload?.api_host);
     }
     return this.listHeartbeats();
   }
@@ -207,6 +272,8 @@ export class MeshBridge {
     for (const node of unique.values()) {
       const peerId = node.peer_id || node.id;
       const address = normalizeAddress(node.addr);
+      this._notePublicHost(node.public_ip);
+      this._notePublicHost(node.api_host);
       let key = address || (peerId ? `heartbeat:${peerId}` : null);
       if (!key) continue;
 
@@ -283,8 +350,8 @@ export class MeshBridge {
             metrics: { status: 'active' },
           });
           return;
-        } catch (error) {
-          this.nodes.delete(nodeUrl);
+        } catch {
+          // Keep the candidate around; the node may come online later.
         }
       }
 
@@ -479,10 +546,42 @@ export class MeshBridge {
     });
   }
 
+  _directTargets(targetNode) {
+    let url;
+    try {
+      url = new URL(targetNode.startsWith('http') ? targetNode : `http://${targetNode}`);
+    } catch {
+      return [targetNode.startsWith('http') ? targetNode : `http://${targetNode}`];
+    }
+    const base = url.origin;
+    if (
+      url.hostname !== '127.0.0.1' &&
+      url.hostname !== 'localhost' &&
+      this._isLocalHost(url.hostname)
+    ) {
+      return [`http://127.0.0.1:${url.port || 4002}`, base];
+    }
+    return [base];
+  }
+
   async _requestDirect(targetNode, payload, onChunk) {
-    const base = targetNode.startsWith('http') ? targetNode : `http://${targetNode}`;
+    for (const base of this._directTargets(targetNode)) {
+      try {
+        const result = await this._requestDirectOnce(base, payload, onChunk);
+        if (result) return result;
+      } catch (error) {
+        // Application errors from a reachable node are real answers: surface
+        // them instead of silently reporting "no node reachable".
+        if (error?.appError) throw error;
+      }
+    }
+    return null;
+  }
+
+  async _requestDirectOnce(base, payload, onChunk) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
+    const timeoutMs = Number(process.env.BEE2BEE_DIRECT_TIMEOUT_MS || 20000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(`${base}/generate`, {
@@ -497,8 +596,10 @@ export class MeshBridge {
         }),
         signal: controller.signal,
       });
-      clearTimeout(timer);
-      if (!response.ok || !response.body) return null;
+      if (!response.ok || !response.body) {
+        clearTimeout(timer);
+        return null;
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -511,7 +612,9 @@ export class MeshBridge {
         try {
           const parsed = JSON.parse(line);
           if (parsed?.status === 'error') {
-            throw new Error(parsed.message || 'Generation failed');
+            const appError = new Error(parsed.message || 'Generation failed');
+            appError.appError = true;
+            throw appError;
           }
           if (parsed?.done) return;
           value = parsed?.text ?? parsed?.response ?? '';
@@ -537,9 +640,11 @@ export class MeshBridge {
       }
       emit(buffer.replace(/\n+$/, ''));
       return { text, metadata: { mode: 'direct-http', target: base } };
-    } catch {
-      clearTimeout(timer);
+    } catch (error) {
+      if (error?.appError) throw error;
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

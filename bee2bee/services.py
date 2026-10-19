@@ -160,6 +160,44 @@ class OllamaService(BaseService):
             "backend": "ollama"
         }
 
+    def _options(self, max_new: int, temperature: float, num_gpu: Optional[int] = None) -> Dict[str, Any]:
+        options: Dict[str, Any] = {
+            "num_predict": max_new,
+            "temperature": temperature,
+        }
+        # On some GPUs Ollama crashes (e.g. "CUDA error ... stack buffer
+        # overrun"). Set BEE2BEE_OLLAMA_NUM_GPU=0 to force CPU inference.
+        if num_gpu is None:
+            env_val = os.getenv("BEE2BEE_OLLAMA_NUM_GPU")
+            if env_val not in (None, ""):
+                try:
+                    num_gpu = int(env_val)
+                except ValueError:
+                    console.print(f"[yellow]Ignoring invalid BEE2BEE_OLLAMA_NUM_GPU={env_val!r}[/yellow]")
+        if num_gpu is not None:
+            options["num_gpu"] = num_gpu
+        return options
+
+    def _option_plan(self, max_new: int, temperature: float) -> List[Dict[str, Any]]:
+        """Return the option sets to try in order.
+
+        When the user has not pinned ``BEE2BEE_OLLAMA_NUM_GPU``, a GPU attempt
+        is followed by a CPU attempt so a crashing GPU driver degrades to CPU
+        instead of failing the request outright.
+        """
+        primary = self._options(max_new, temperature)
+        if "num_gpu" in primary:
+            return [primary]
+        return [primary, self._options(max_new, temperature, num_gpu=0)]
+
+    @staticmethod
+    def _is_cuda_error(text: str) -> bool:
+        haystack = (text or "").lower()
+        return any(
+            marker in haystack
+            for marker in ("cuda", "0xc0000409", "kernel image is invalid", "llama-server process")
+        )
+
     def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         import requests
         prompt = params.get("prompt")
@@ -168,82 +206,121 @@ class OllamaService(BaseService):
         
         if not prompt:
             raise ServiceError("Missing prompt")
-            
-        try:
-            t0 = time.time()
-            # Use actual_model for the real request to Ollama
-            target_model = getattr(self, 'actual_model', self.model_name)
-            # Non-streaming implementation for now
-            payload = {
-                "model": target_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_predict": max_new,
-                    "temperature": temperature
-                }
-            }
-            res = requests.post(f"{self.host}/api/generate", json=payload, timeout=300) # Long timeout for gen
-            if res.status_code != 200:
-                raise ServiceError(f"Ollama Error: {res.text}")
-            
-            data = res.json()
-            text = data.get("response", "")
-            
-            # Stats
-            eval_count = data.get("eval_count", 0)
-            duration_ns = data.get("total_duration", 0)
-            latency_ms = duration_ns / 1_000_000 if duration_ns > 0 else (time.time() - t0) * 1000.0
-            
-            return {
-                "text": text,
-                "tokens": eval_count,
-                "latency_ms": latency_ms,
-                "price_per_token": self.price_per_token,
-                "cost": 0.0
-            }
-        except Exception as e:
-            raise ServiceError(f"Ollama Exec Error: {e}")
 
-    def execute_stream(self, params: Dict[str, Any]):
+        target_model = getattr(self, 'actual_model', self.model_name)
+        plan = self._option_plan(max_new, temperature)
+        last_error: Optional[str] = None
+
+        for index, options in enumerate(plan):
+            is_last = index == len(plan) - 1
+            try:
+                t0 = time.time()
+                payload = {
+                    "model": target_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": options,
+                }
+                res = requests.post(f"{self.host}/api/generate", json=payload, timeout=300)
+                if res.status_code != 200:
+                    error_text = f"Ollama Error: {res.text}"
+                    if not is_last and self._is_cuda_error(error_text):
+                        logger.warning("Ollama GPU failure, retrying on CPU (num_gpu=0)")
+                        last_error = error_text
+                        continue
+                    raise ServiceError(error_text)
+
+                data = res.json()
+                if data.get("error"):
+                    error_text = f"Ollama Error: {data['error']}"
+                    if not is_last and self._is_cuda_error(error_text):
+                        logger.warning("Ollama GPU failure, retrying on CPU (num_gpu=0)")
+                        last_error = error_text
+                        continue
+                    raise ServiceError(error_text)
+
+                text = data.get("response", "")
+                eval_count = data.get("eval_count", 0)
+                duration_ns = data.get("total_duration", 0)
+                latency_ms = duration_ns / 1_000_000 if duration_ns > 0 else (time.time() - t0) * 1000.0
+
+                return {
+                    "text": text,
+                    "tokens": eval_count,
+                    "latency_ms": latency_ms,
+                    "price_per_token": self.price_per_token,
+                    "cost": 0.0
+                }
+            except ServiceError as e:
+                last_error = str(e)
+                if is_last or not self._is_cuda_error(last_error):
+                    raise
+                logger.warning("Ollama GPU failure, retrying on CPU (num_gpu=0)")
+            except Exception as e:
+                raise ServiceError(f"Ollama Exec Error: {e}")
+
+        raise ServiceError(last_error or "Ollama execution failed")
+
+    def _stream_once(self, target_model: str, prompt: str, options: Dict[str, Any]):
         import requests
         import json
-        prompt = params.get("prompt")
-        target_model = getattr(self, 'actual_model', self.model_name)
-        
         payload = {
             "model": target_model,
             "prompt": prompt,
             "stream": True,
-            "options": {
-                "num_predict": int(params.get("max_new_tokens", 2048)),
-                "temperature": float(params.get("temperature", 0.7))
-            }
+            "options": options,
         }
-        
-        try:
-            res = requests.post(f"{self.host}/api/generate", json=payload, stream=True, timeout=300)
-            if res.status_code != 200:
-                yield json.dumps({"status": "error", "message": f"Ollama Error: {res.text}"}) + "\n"
+        emitted = False
+        res = requests.post(f"{self.host}/api/generate", json=payload, stream=True, timeout=300)
+        if res.status_code != 200:
+            raise ServiceError(f"Ollama Error: {res.text}")
+
+        for line in res.iter_lines():
+            if not line:
+                continue
+            try:
+                data = json.loads(line.decode("utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if data.get("error"):
+                message = f"Ollama Error: {data['error']}"
+                if not emitted and self._is_cuda_error(message):
+                    raise ServiceError(message)
+                yield json.dumps({"status": "error", "message": message}) + "\n"
                 return
+            chunk = data.get("response", "")
+            if chunk:
+                emitted = True
+                yield json.dumps({"text": chunk}) + "\n"
+            if data.get("done"):
+                break
 
-            for line in res.iter_lines():
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
-                    continue
-                chunk = data.get("response", "")
-                if chunk:
-                    yield json.dumps({"text": chunk}) + "\n"
-                if data.get("done"):
-                    break
+        yield json.dumps({"done": True}) + "\n"
 
-            yield json.dumps({"done": True}) + "\n"
-        except Exception as e:
-            logger.error(f"Ollama stream failed: {e}")
-            yield json.dumps({"status": "error", "message": str(e)}) + "\n"
+    def execute_stream(self, params: Dict[str, Any]):
+        import json
+        prompt = params.get("prompt")
+        target_model = getattr(self, 'actual_model', self.model_name)
+        plan = self._option_plan(
+            int(params.get("max_new_tokens", 2048)),
+            float(params.get("temperature", 0.7)),
+        )
+
+        for index, options in enumerate(plan):
+            is_last = index == len(plan) - 1
+            try:
+                yield from self._stream_once(target_model, prompt, options)
+                return
+            except ServiceError as e:
+                if is_last or not self._is_cuda_error(str(e)):
+                    logger.error(f"Ollama stream failed: {e}")
+                    yield json.dumps({"status": "error", "message": str(e)}) + "\n"
+                    return
+                logger.warning("Ollama GPU failure, retrying on CPU (num_gpu=0)")
+            except Exception as e:
+                logger.error(f"Ollama stream failed: {e}")
+                yield json.dumps({"status": "error", "message": str(e)}) + "\n"
+                return
 
 class HFRemoteService(BaseService):
     def __init__(self, model_name: str, token: Optional[str] = None, price_per_token: float = 0.005):

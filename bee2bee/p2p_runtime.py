@@ -375,6 +375,9 @@ class P2PNode:
 
     async def _handle_connection(self, ws: ServerConnection):
         logger.info(f"New connection from {ws.remote_address}")
+        # Greet inbound peers so clients (web gateway, other nodes) learn our
+        # identity, models and regional metadata.
+        await self._send(ws, self._make_hello_msg())
         await self._peer_reader(ws)
 
     async def _peer_reader(self, ws: ClientConnection | ServerConnection):
@@ -392,9 +395,7 @@ class P2PNode:
                     logger.error(f"Valid JSON expected from {rem}: {e}")
                     continue
                 except Exception as e:
-                    logger.error(f"Error handling message from {rem}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.opt(exception=e).error(f"Error handling message from {rem}: {e}")
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning(f"Connection closed {rem}: {e.code} {e.reason}")
         except Exception as e:

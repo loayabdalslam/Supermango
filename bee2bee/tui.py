@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -26,6 +27,63 @@ RECENT_LOGS: Deque[str] = deque(maxlen=8)
 
 def _log_sink(message) -> None:
     RECENT_LOGS.append(str(message).rstrip())
+
+
+class _LoguruBridge(logging.Handler):
+    """Forward stdlib logging records to loguru instead of stderr."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        logger.opt(depth=6, exception=record.exc_info).log(level, record.getMessage())
+
+
+def _route_library_logging(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+    """Keep third-party logging off stderr while Rich owns the terminal.
+
+    Rich's ``Live`` installs a proxy on stderr. When libraries such as
+    websockets, asyncio or uvicorn write tracebacks there from inside the event
+    loop, the resulting re-entrant render stalls the loop for seconds at a time
+    and freezes all networking (handshakes, the local API, heartbeats).
+    """
+
+    bridge = _LoguruBridge()
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    root.addHandler(bridge)
+    root.setLevel(logging.INFO)
+
+    for name in (
+        "websockets",
+        "websockets.server",
+        "websockets.client",
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+        "asyncio",
+    ):
+        target = logging.getLogger(name)
+        for handler in list(target.handlers):
+            target.removeHandler(handler)
+        target.propagate = True
+        target.setLevel(logging.INFO)
+
+    logging.raiseExceptions = False
+
+    if loop is not None:
+
+        def _handle_exception(_loop, context) -> None:
+            exc = context.get("exception")
+            message = context.get("message") or "asyncio error"
+            if exc is not None:
+                logger.opt(exception=exc).error(f"asyncio: {message}")
+            else:
+                logger.error(f"asyncio: {message}")
+
+        loop.set_exception_handler(_handle_exception)
 
 
 @contextmanager
@@ -217,6 +275,7 @@ async def run_tui(
     logger.remove()
     logger.add(_log_sink, level="INFO", format="{message}")
     logger.add("bee2bee.log", rotation="10 MB", level="DEBUG")
+    _route_library_logging(asyncio.get_running_loop())
 
     node = P2PNode(host=host, port=port, region=region)
     node.api_port = api_port or 0
@@ -231,7 +290,11 @@ async def run_tui(
 
         bee2bee.api.node = node
         config = uvicorn.Config(
-            bee2bee.api.app, host=host, port=api_port, log_level="warning"
+            bee2bee.api.app,
+            host=host,
+            port=api_port,
+            log_level="warning",
+            log_config=None,
         )
         asyncio.create_task(uvicorn.Server(config).serve())
 
